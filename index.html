@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBR Resgate — Treinamento de Juízes</title>
+  <link rel="stylesheet" href="css/style.css?v=1.0">
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="mark">R2</div>
+      <div>
+        <h1>OBR Resgate — Treinamento de Juízes</h1>
+        <div class="sub" id="arenaLabel">arena: —</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="icon-btn" id="btnHelp2" title="Guia rápido">?</button>
+    </div>
+  </header>
+
+  <div class="mode-tabs">
+    <button id="tabEditor" data-mode="editor"><span class="num">1</span> Editor de arena</button>
+    <button id="tabSim" class="active" data-mode="sim"><span class="num">2</span> Simulação</button>
+    <button id="tabManual" data-mode="manual"><span class="num">3</span> Controle manual</button>
+    <button id="tabConstructor" data-mode="constructor"><span class="num">4</span> Construtor de ladrilho</button>
+    <button id="tabObjConstructor" data-mode="objconstructor"><span class="num">5</span> Construtor de objeto</button>
+    <button id="tabRobot" data-mode="robot"><span class="num">6</span> Construtor de robô</button>
+  </div>
+
+  <div class="main">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="arena" width="900" height="640"></canvas>
+      <canvas id="ctorCanvas" width="900" height="900" class="hidden" style="background:#1a2332;border-radius:8px;cursor:crosshair;image-rendering:pixelated;max-width:100%;max-height:100%"></canvas>
+      <canvas id="objCtorCanvas" width="600" height="600" class="hidden" style="background:#1a2332;border-radius:8px;cursor:crosshair;image-rendering:pixelated;max-width:100%;max-height:100%"></canvas>
+      <canvas id="robotCtorCanvas" width="600" height="600" class="hidden" style="background:#0b1220;border-radius:8px;cursor:crosshair;max-width:100%;max-height:100%"></canvas>
+      <div class="readout">
+        <div class="item"><span class="k">Tempo</span><span class="v" id="simTime">0.0s</span></div>
+        <div class="item"><span class="k">Falhas</span><span class="v" id="failCount">0</span></div>
+        <div class="item"><span class="k">Estado</span><span class="v" id="simState">Parado</span></div>
+      </div>
+      <div class="zoom-bar" id="arenaZoomBar">
+        <button id="btnZoomOut">−</button>
+        <button id="btnZoomFit">Ajustar</button>
+        <button id="btnZoomIn">+</button>
+        <button id="btnZoomReset">100%</button>
+        <span id="zoomLabel" style="font-size:0.72rem;color:var(--muted);padding:0 0.4rem;font-family:var(--font-mono)">100%</span>
+      </div>
+      <div class="zoom-bar hidden" id="ctorZoomBar">
+        <span style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono)">Construtor 3×3 · centro = ladrilho 300×300 mm</span>
+      </div>
+      <div class="zoom-bar hidden" id="objCtorZoomBar">
+        <span style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono)">Construtor de objeto · 300×300 mm</span>
+      </div>
+      <div class="zoom-bar hidden" id="robotCtorZoomBar">
+        <span style="font-size:0.72rem;color:var(--muted);font-family:var(--font-mono)">Construtor de robô · detectores em mm · +Y = frente</span>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <!-- SIM -->
+      <div id="panelSim">
+        <div class="panel">
+          <h2>Execução</h2>
+          <div class="controls">
+            <button id="btnPlay" class="primary">▶ Play</button>
+            <button id="btnPause">⏸ Pausar</button>
+            <button id="btnStep">⏭ Passo</button>
+            <button id="btnReset" class="danger">↺ Reiniciar</button>
+          </div>
+          <div class="controls" style="margin-top:0.4rem">
+            <button id="btnRestartRobot" class="success" style="width:100%">Voltar robô ao início</button>
+          </div>
+          <label style="font-size:0.68rem;color:var(--muted);display:block;margin-top:0.5rem">Velocidade da simulação</label>
+          <input type="range" id="speed" min="0.2" max="3" step="0.1" value="1">
+        </div>
+        <div class="panel">
+          <h2>Cenário</h2>
+          <select id="scenarioSelect">
+            <option value="basic">Trajeto básico + obstáculo</option>
+            <option value="gap">Gap + lombada</option>
+            <option value="intersection">Interseção com verde</option>
+            <option value="rescue">Sala de resgate</option>
+            <option value="custom">Arena personalizada</option>
+          </select>
+          <button id="btnLoad" style="margin-top:0.35rem;width:100%">Carregar cenário</button>
+        </div>
+        <div class="panel">
+          <h2>Controle do robô</h2>
+          <div class="controls" style="gap:0.35rem">
+            <button id="btnControlPath" class="primary active-tool" style="flex:1">Path</button>
+            <button id="btnControlScript" style="flex:1">Script</button>
+          </div>
+          <p class="key-hint">Path = automático atual. Script = move o sprite com base no código e nos detectores.</p>
+          <label style="font-size:0.66rem;color:var(--muted);display:block;margin-top:0.4rem">Script (JS)</label>
+          <textarea id="robotScript" spellcheck="false" style="width:100%;min-height:140px;font-family:var(--font-mono);font-size:0.72rem;background:#0b1220;color:#e2e8f0;border:1px solid var(--line);border-radius:6px;padding:0.4rem;resize:vertical">// sensors.&lt;id&gt; = { r,g,b,lum }
+// setVelocity(vMmPerSec, omegaRadPerSec)  — só move o sprite
+// stop()
+function update(sensors, dt) {
+  // exemplo: ande devagar para frente
+  setVelocity(40, 0);
+}</textarea>
+          <div class="controls" style="margin-top:0.35rem">
+            <button id="btnScriptExample" style="flex:1">Exemplo linha</button>
+            <button id="btnScriptApply" class="success" style="flex:1">Aplicar script</button>
+          </div>
+          <div id="sensorReadout" style="margin-top:0.45rem;font-size:0.7rem;font-family:var(--font-mono);color:var(--muted);max-height:100px;overflow:auto">sensores: —</div>
+        </div>
+      </div>
+
+      <!-- EDITOR -->
+      <div id="panelEditor" class="hidden">
+        <div class="panel">
+          <h2>Modo de edição</h2>
+          <div class="controls" style="gap:0.35rem">
+            <button id="btnShowTiles" class="primary active-tool" style="flex:1">Ladrilhos</button>
+            <button id="btnShowObjects" style="flex:1">Objetos</button>
+          </div>
+          <p class="key-hint">Escolha o que deseja editar na arena.</p>
+        </div>
+        <div id="editorTilesSection">
+          <div class="panel">
+            <h2>Ladrilhos</h2>
+            <div class="tile-tools" id="tileTools"></div>
+            <p class="key-hint">Ladrilhos = piso · ladrilhos personalizados aparecem junto dos padrão. Passe o mouse para ver o preview.</p>
+          </div>
+          <div class="panel">
+            <h2>Marcadores (em qualquer ladrilho)</h2>
+            <div class="tile-tools" id="markerTools">
+              <button data-mark="start">Marcar start</button>
+              <button data-mark="finish">Marcar chegada</button>
+              <button data-mark="checkpoint">Marcar checkpoint</button>
+              <button data-mark="clear">Limpar marcadores</button>
+            </div>
+            <p class="key-hint">Clique num ladrilho existente para ligar/desligar o marcador sem mudar o piso.</p>
+          </div>
+        </div>
+        <div id="editorObjectsSection" class="hidden">
+          <div class="panel">
+            <h2>Objetos (sobre o ladrilho)</h2>
+            <div class="tile-tools" id="objectTools">
+              <button data-obj="obstacle">Obstáculo</button>
+              <button data-obj="gangorra">Gangorra</button>
+              <button data-obj="rampa">Rampa</button>
+              <button data-obj="custom">Obj. custom</button>
+              <button data-obj="erase">Apagar objeto</button>
+            </div>
+            <div id="objectPalette" class="tile-tools" style="margin-top:0.4rem"></div>
+            <select id="customObjSelect" style="margin-top:0.35rem"><option value="">— obj custom —</option></select>
+            <p class="key-hint">Clique no ladrilho para centrar o objeto. Mesmo funcionamento do seletor de ladrilhos.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Transformar selecionado</h2>
+          <div class="transform-btns">
+            <button id="btnRotate">↻ 90°</button>
+            <button id="btnMirrorH">↔ H</button>
+            <button id="btnMirrorV">↕ V</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Ações</h2>
+          <div class="controls">
+            <button id="btnClearArena" class="danger">Limpar</button>
+            <button id="btnSaveArena" class="success">Salvar</button>
+            <button id="btnExportJSON">Exportar</button>
+            <button id="btnImportJSON">Importar</button>
+            <button id="btnMeasure">Medir (mm)</button>
+          </div>
+          <p class="key-hint" id="measureHint">Medir: 2 cliques na arena. Esc cancela.</p>
+          <input type="file" id="importFile" accept=".json,application/json" class="hidden">
+        </div>
+        <div class="panel">
+          <h2>Grade (ladrilhos preservados ao redimensionar)</h2>
+          <label style="font-size:0.66rem;color:var(--muted)">Largura: <span id="gridWVal">10</span></label>
+          <input type="range" id="gridW" min="3" max="20" value="10">
+          <label style="font-size:0.66rem;color:var(--muted)">Altura: <span id="gridHVal">6</span></label>
+          <input type="range" id="gridH" min="3" max="20" value="6">
+        </div>
+      </div>
+
+      <!-- MANUAL -->
+      <div id="panelManual" class="hidden">
+        <div class="panel">
+          <h2>Controle do robô</h2>
+          <div class="manual-keys">
+            <div></div><button id="btnUp">↑</button><div></div>
+            <button id="btnLeft">←</button><button id="btnDown">↓</button><button id="btnRight">→</button>
+          </div>
+          <p class="key-hint">WASD / setas · Q/E girar · Espaço+arrastar = pan</p>
+          <div class="controls" style="margin-top:0.4rem;justify-content:center">
+            <button id="btnPlaceRobot" class="primary">Posicionar robô</button>
+            <button id="btnStopRobot">Parar</button>
+          </div>
+          <div class="controls" style="margin-top:0.3rem">
+            <button id="btnRestartRobot2" class="success" style="width:100%">Voltar ao início</button>
+          </div>
+          <div class="controls" style="margin-top:0.3rem">
+            <button id="btnResetManualRobot" class="danger" style="width:100%" title="Zera teclas, velocidade e estado do robô caso esteja travado">↺ Resetar robô (destravar)</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Ações de juiz</h2>
+          <div class="controls">
+            <button id="btnForceFail" class="danger">Forçar falha</button>
+            <button id="btnScoreNow" class="success">Avaliar posição</button>
+          </div>
+          <div class="controls" style="margin-top:0.3rem">
+            <button id="btnPickup">Coletar vítima</button>
+            <button id="btnDrop">Largar vítima</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONSTRUCTOR (modal) -->
+      <div id="panelConstructor" class="hidden">
+        <div class="panel">
+          <h2>Ferramentas</h2>
+          <div class="ctor-tools" id="ctorToolsSide">
+            <button data-ctor="paint" class="active-tool">Pincel</button>
+            <button data-ctor="erase">Borracha</button>
+            <button data-ctor="picker">Conta-gotas</button>
+            <button data-ctor="measure">Medir (mm)</button>
+            <button data-ctor="clear">Limpar tudo</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Cor do pincel</h2>
+          <div id="ctorColorPalette" class="color-palette" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem">
+            <button type="button" class="color-swatch active-tool" data-color="#000000" title="Preto" style="background:#000000;width:28px;height:28px;border-radius:4px;border:2px solid #fff;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#f97316" title="Laranja" style="background:#f97316;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#22c55e" title="Verde" style="background:#22c55e;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#a855f7" title="Roxo" style="background:#a855f7;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#3b82f6" title="Azul" style="background:#3b82f6;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#ef4444" title="Vermelho" style="background:#ef4444;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+          </div>
+          <label style="font-size:0.66rem;color:var(--muted)">RGB livre</label>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.2rem">
+            <input type="color" id="ctorColorPicker" value="#000000" style="width:48px;height:28px;padding:0;border:none;cursor:pointer">
+            <input type="text" id="ctorColorHex" value="#000000" style="flex:1;font-family:var(--font-mono);font-size:0.75rem">
+          </div>
+          <div id="activeColorSwatch" style="height:28px;border-radius:6px;background:#000;border:1px solid var(--line);margin-top:0.35rem"></div>
+        </div>
+        <div class="panel">
+          <h2>Configuração do pincel</h2>
+          <label style="font-size:0.66rem;color:var(--muted);display:flex;align-items:center;gap:0.4rem;margin:0.25rem 0;cursor:pointer">
+            <input type="checkbox" id="ctorPaintSuccessZone"> Pintar zona de sucesso
+          </label>
+          <label style="font-size:0.66rem;color:var(--muted);display:flex;align-items:center;gap:0.4rem;margin:0.25rem 0;cursor:pointer">
+            <input type="checkbox" id="ctorPaintAsLine"> Pintar usando linha (2 cliques)
+          </label>
+          <label style="font-size:0.66rem;color:var(--muted);margin-top:0.4rem;display:block">Tamanho do pincel (mm)</label>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.2rem">
+            <input type="range" id="brushSize" min="1" max="300" value="20" style="flex:1">
+            <input type="number" id="brushSizeNum" min="1" max="300" value="20" style="width:64px">
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted)">
+            <span>1 mm</span><span id="brushSizeLabel">20 mm</span><span>300 mm</span>
+          </div>
+          <div class="controls" style="margin-top:0.35rem">
+            <button id="brushRound" class="active-tool">● Redondo</button>
+            <button id="brushSquare">■ Quadrado</button>
+          </div>
+          <div class="ctor-preview-label" style="margin-top:0.5rem">Grid lock (passo em mm)</div>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.2rem">
+            <input type="range" id="gridLock" min="1" max="50" value="10" style="flex:1">
+            <input type="number" id="gridLockNum" min="1" max="50" value="10" style="width:64px">
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted)">
+            <span>1 mm</span><span id="gridLockLabel">10 mm</span><span>50 mm</span>
+          </div>
+          <p class="key-hint">Encaixa pincel/linha na grade. Marque “linha” para desenhar com 2 cliques.</p>
+        </div>
+        <div class="panel">
+          <h2>Metadados</h2>
+          <label style="font-size:0.66rem;color:var(--muted)">Nome</label>
+          <input type="text" id="ctorName" value="Meu Ladrilho">
+          <label style="font-size:0.66rem;color:var(--muted)">Pontos</label>
+          <input type="number" id="ctorPoints" value="10" min="0" max="60">
+          <button id="btnCtorSave" class="success" style="width:100%;margin-top:0.4rem">Salvar na biblioteca</button>
+        </div>
+        <div class="panel">
+          <h2>Biblioteca</h2>
+          <div id="customLibrary" style="font-size:0.72rem;color:var(--muted)">Nenhum ainda.</div>
+          <p class="key-hint" style="margin-top:0.3rem">Clique em “Editar” para carregar um ladrilho existente no construtor.</p>
+        </div>
+        <div class="panel">
+          <div class="info-box">Centro 300×300 mm = ladrilho. Fundo branco por padrão. 1 px = 1 mm.</div>
+        </div>
+      </div>
+
+      <!-- OBJ CONSTRUCTOR (modal) -->
+      <div id="panelObjConstructor" class="hidden">
+        <div class="panel">
+          <h2>Construtor de objeto</h2>
+          <p class="key-hint" style="text-align:left">300×300 mm (1 px = 1 mm). Fundo branco no construtor; ao renderizar na arena o fundo não é desenhado.</p>
+        </div>
+        <div class="panel">
+          <h2>Ferramentas</h2>
+          <div class="ctor-tools" id="objCtorTools">
+            <button data-oct="paint" class="active-tool">Pincel</button>
+            <button data-oct="erase">Borracha</button>
+            <button data-oct="picker">Conta-gotas</button>
+            <button data-oct="measure">Medir (mm)</button>
+            <button data-oct="clear">Limpar tudo</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Cor do pincel</h2>
+          <div id="objColorPalette" class="color-palette" style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.4rem">
+            <button type="button" class="color-swatch active-tool" data-color="#000000" title="Preto" style="background:#000000;width:28px;height:28px;border-radius:4px;border:2px solid #fff;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#f97316" title="Laranja" style="background:#f97316;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#22c55e" title="Verde" style="background:#22c55e;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#a855f7" title="Roxo" style="background:#a855f7;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#3b82f6" title="Azul" style="background:#3b82f6;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+            <button type="button" class="color-swatch" data-color="#ef4444" title="Vermelho" style="background:#ef4444;width:28px;height:28px;border-radius:4px;border:2px solid transparent;cursor:pointer"></button>
+          </div>
+          <label style="font-size:0.66rem;color:var(--muted)">RGB livre</label>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.2rem">
+            <input type="color" id="objColorPicker" value="#000000" style="width:48px;height:28px;padding:0;border:none;cursor:pointer">
+            <input type="text" id="objColorHex" value="#000000" style="flex:1;font-family:var(--font-mono);font-size:0.75rem">
+          </div>
+          <div id="objActiveColor" style="height:28px;border-radius:6px;background:#000;border:1px solid var(--line);margin-top:0.35rem"></div>
+        </div>
+        <div class="panel">
+          <h2>Configuração do pincel</h2>
+          <label style="font-size:0.66rem;color:var(--muted);display:flex;align-items:center;gap:0.4rem;margin:0.25rem 0;cursor:pointer">
+            <input type="checkbox" id="objPaintAsLine"> Pintar usando linha (2 cliques)
+          </label>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.35rem">
+            <input type="range" id="objBrushSize" min="1" max="300" value="20" style="flex:1">
+            <input type="number" id="objBrushSizeNum" min="1" max="300" value="20" style="width:64px">
+          </div>
+          <div style="font-size:0.7rem;color:var(--muted);text-align:center" id="objBrushSizeLabel">20 mm</div>
+          <div class="controls" style="margin-top:0.35rem">
+            <button id="objBrushRound" class="active-tool">● Redondo</button>
+            <button id="objBrushSquare">■ Quadrado</button>
+          </div>
+          <div class="ctor-preview-label">Grid lock (passo em mm)</div>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.2rem">
+            <input type="range" id="objGridLock" min="1" max="50" value="10" style="flex:1">
+            <input type="number" id="objGridLockNum" min="1" max="50" value="10" style="width:64px">
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted)">
+            <span>1 mm</span><span id="objGridLockLabel">10 mm</span><span>50 mm</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Metadados</h2>
+          <label style="font-size:0.66rem;color:var(--muted)">Nome</label>
+          <input type="text" id="objCtorName" value="Meu Objeto">
+          <label style="font-size:0.66rem;color:var(--muted)">Pontos</label>
+          <input type="number" id="objCtorPoints" value="20" min="0" max="60">
+          <button id="btnObjCtorSave" class="success" style="width:100%;margin-top:0.4rem">Salvar objeto</button>
+        </div>
+        <div class="panel">
+          <h2>Biblioteca de objetos</h2>
+          <div id="customObjLibrary" style="font-size:0.72rem;color:var(--muted)">Nenhum ainda.</div>
+        </div>
+      </div>
+
+      <!-- ROBOT CONSTRUCTOR -->
+      <div id="panelRobot" class="hidden">
+        <div class="panel">
+          <h2>Corpo do robô</h2>
+          <label style="font-size:0.66rem;color:var(--muted)">Nome</label>
+          <input type="text" id="robotDefName" value="Meu Robô">
+          <label style="font-size:0.66rem;color:var(--muted)">Largura (mm)</label>
+          <input type="number" id="robotBodyW" value="120" min="40" max="300">
+          <label style="font-size:0.66rem;color:var(--muted)">Comprimento (mm)</label>
+          <input type="number" id="robotBodyH" value="150" min="40" max="300">
+          <p class="key-hint">Origem no centro. +Y = frente do robô.</p>
+        </div>
+        <div class="panel">
+          <h2>Detectores</h2>
+          <div class="controls" style="gap:0.35rem;flex-wrap:wrap">
+            <button id="btnAddUnderDet" class="primary">+ Solo (under)</button>
+            <button id="btnAddForwardRect">+ Frente retângulo</button>
+            <button id="btnAddForwardTri">+ Frente triângulo</button>
+          </div>
+          <div id="detectorList" style="margin-top:0.45rem;font-size:0.72rem"></div>
+          <p class="key-hint">Clique na lista para selecionar. Arraste no canvas para mover. Delete remove o selecionado.</p>
+        </div>
+        <div class="panel">
+          <h2>Detector selecionado</h2>
+          <div id="detectorEdit" style="font-size:0.72rem;color:var(--muted)">Nenhum selecionado.</div>
+        </div>
+        <div class="panel">
+          <h2>Biblioteca de robôs</h2>
+          <button id="btnRobotSave" class="success" style="width:100%">Salvar definição</button>
+          <button id="btnRobotApply" class="primary" style="width:100%;margin-top:0.3rem">Usar na simulação</button>
+          <div id="robotLibrary" style="margin-top:0.45rem;font-size:0.72rem;color:var(--muted)">Nenhum ainda.</div>
+        </div>
+        <div class="panel">
+          <div class="info-box"><b>under</b>: amostra o piso sob a área no chassi.<br><b>forward</b>: projeta retângulo/triângulo à frente (e laterais via offset X).</div>
+        </div>
+      </div>
+
+      <!-- COMMON -->
+      <div class="panel">
+        <h2>Pontuação</h2>
+        <div class="score-display" id="totalScore">0</div>
+        <div class="score-breakdown">
+          <div><span>Trajeto</span><span id="scoreTrajeto">0</span></div>
+          <div><span>Checkpoints</span><span id="scoreCP">0</span></div>
+          <div><span>Chegada</span><span id="scoreFinish">0</span></div>
+          <div><span>Multiplicadores</span><span id="scoreMult">×1.0</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Registro de eventos</h2>
+        <div class="event-log" id="eventLog"></div>
+      </div>
+      <div class="panel">
+        <div class="info-box" id="helpBox">Zoom: Ajustar mostra a arena inteira. Arraste com botão do meio ou Espaço+arrastar para pan.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>Modo: <strong id="simMode">Simulação</strong></span>
+    <span>Grade: <strong id="gridStatus">10×6</strong></span>
+    <span>Robô: <strong id="robotPos">—</strong></span>
+    <span>Selecionado: <strong id="selectedInfo">—</strong></span>
+    <span>Zoom: <strong id="zoomStatus">Ajustar</strong></span>
+  </div>
+
+  <!-- floating tile preview tooltip -->
+  <div class="tile-preview-pop" id="tilePreviewPop">
+    <canvas id="tilePreviewCanvas" width="120" height="120"></canvas>
+    <div class="cap" id="tilePreviewCap">—</div>
+  </div>
+
+  <!-- help / onboarding drawer -->
+  <div class="scrim" id="scrim"></div>
+  <div class="drawer" id="drawer">
+    <div class="drawer-head">
+      <h2>Guia rápido</h2>
+      <button class="icon-btn" id="btnCloseDrawer">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="step">
+        <div class="n">1</div>
+        <div class="body"><h3>Monte a arena</h3><p>Comece na aba <b>Editor de arena</b>. Escolha um ladrilho na lista (padrão ou personalizado) e clique na grade para posicioná-lo.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <div class="body"><h3>Crie ladrilhos e objetos personalizados</h3><p>Use as abas <b>Construtor de ladrilho</b> e <b>Construtor de objeto</b> para desenhar peças 300×300 mm. Elas aparecem automaticamente junto dos ladrilhos padrão no Editor.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <div class="body"><h3>Carregue um cenário</h3><p>Na aba <b>Simulação</b>, escolha um cenário pronto ou sua arena personalizada e clique em Carregar cenário.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">4</div>
+        <div class="body"><h3>Rode a simulação</h3><p>Use Play / Pausar / Passo para controlar o robô automático. A pontuação atualiza em tempo real no painel direito.</p></div>
+      </div>
+      <div class="step">
+        <div class="n">5</div>
+        <div class="body"><h3>Controle manual</h3><p>Assuma o robô com WASD/setas para testar situações específicas como um robô de competidor faria.</p></div>
+      </div>
+      <div class="drawer-section-title">Atalhos</div>
+      <div class="step">
+        <div class="body">
+          <p style="margin-bottom:0.3rem"><span class="key">R</span> gira o item selecionado</p>
+          <p style="margin-bottom:0.3rem"><span class="key">T</span> espelha o item selecionado</p>
+          <p style="margin-bottom:0.3rem"><span class="key">Esc</span> cancela a ferramenta atual</p>
+          <p style="margin-bottom:0.3rem"><span class="key">Ctrl+Z</span> / <span class="key">Ctrl+Y</span> desfazer / refazer</p>
+          <p>Botão do meio + Shift = pan da câmera</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js?v=1.0"></script>
+</body>
+</html>
