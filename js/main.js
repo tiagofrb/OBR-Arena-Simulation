@@ -13,8 +13,10 @@ import {
   convertOfficialArena,
   convertToOfficialArena,
   getCachedOfficialImage,
-  preloadOfficialImage
+  preloadOfficialImage,
+  validateOfficialMap
 } from './io/officialArenaAdapter.js';
+import { updateTileIndex } from './io/pathFinder.js';
 
 const dataManager = new DataManager();
 
@@ -178,6 +180,7 @@ const sim = {
   scriptFn: null,
   scriptError: null,
   customMode: false, // true = desliga compatibilidade com formato oficial
+  currentFloor: 0, // andar z sendo editado (RCJ multi-level)
   officialMeta: null // metadados do último import oficial (name, duration, victims, tileSet…)
 };
 
@@ -1284,6 +1287,20 @@ function positionTilePreview(btn) {
   tilePreviewPop.style.top = Math.max(8, top) + 'px';
 }
 
+
+function clearTileSelection() {
+  sim.selectedTool = null;
+  sim.placingOfficialFile = null;
+  sim.placingCustomId = null;
+  document.querySelectorAll('#tileTools button, #officialTileTools button').forEach(b => b.classList.remove('active-tool'));
+}
+
+function shouldKeepToolArmed(ev) {
+  // Shift = colocar múltiplas vezes (mantém ferramenta armada)
+  if (ev && ev.shiftKey) return true;
+  return false;
+}
+
 function selectTileTool(type, customIdx) {
   // Modo oficial: não permite armar ferramenta de ladrilho personalizado
   if (type === 'custom' && !sim.customMode) {
@@ -1316,83 +1333,88 @@ function renderTilePalette() {
 
   const makeSwatchCanvas = () => {
     const c = document.createElement('canvas');
-    c.width = 40; c.height = 40;
+    c.width = 44; c.height = 44;
     return c;
   };
 
-  BUILTIN_TILE_DEFS.forEach(def => {
+  if (!sim.customLibrary.length) {
+    const empty = document.createElement('p');
+    empty.className = 'key-hint';
+    empty.textContent = sim.customMode
+      ? 'Nenhum ladrilho custom. Crie no Construtor de ladrilho.'
+      : 'Ative Modo Custom e crie ladrilhos no Construtor.';
+    wrap.appendChild(empty);
+    return;
+  }
+
+  const label = document.createElement('div');
+  label.className = 'tile-section-label';
+  label.textContent = sim.customMode ? 'Criados no app' : 'Bloqueados (ative Modo Custom)';
+  wrap.appendChild(label);
+
+  sim.customLibrary.forEach((c, i) => {
     const btn = document.createElement('button');
     btn.className = 'tile-btn';
-    btn.dataset.type = def.type;
+    btn.dataset.type = 'custom';
+    btn.dataset.customidx = i;
+    btn.dataset.dragKind = 'custom';
+    btn.title = c.name || ('custom ' + i);
+    if (!sim.customMode) {
+      btn.disabled = true;
+      btn.style.opacity = '0.45';
+      btn.title = 'Disponível apenas no Modo Custom';
+      btn.draggable = false;
+    } else {
+      btn.draggable = true;
+    }
     const sw = document.createElement('span');
     sw.className = 'swatch';
     const cnv = makeSwatchCanvas();
-    renderTilePreviewToCanvas(cnv, def.type, null);
+    renderTilePreviewToCanvas(cnv, 'custom', c);
     sw.appendChild(cnv);
-    const lbl = document.createElement('span');
-    lbl.className = 'lbl';
-    lbl.textContent = def.label;
+    const del = document.createElement('button');
+    del.className = 'del-x';
+    del.textContent = '✕';
+    del.title = 'Excluir ladrilho personalizado';
+    del.onclick = (ev) => {
+      ev.stopPropagation();
+      if (confirm(`Excluir "${c.name}"?`)) {
+        sim.customLibrary.splice(i, 1);
+        persist('obr_custom_tiles', sim.customLibrary);
+        if (sim.selectedTool === 'custom' && sim.placingCustomId === i) {
+          clearTileSelection();
+        }
+        refreshCustomSelect();
+      }
+    };
     btn.appendChild(sw);
-    btn.appendChild(lbl);
-    btn.onclick = () => selectTileTool(def.type, null);
-    attachTilePreviewHover(btn, def.type, null, def.label);
+    btn.appendChild(del);
+    btn.onclick = () => selectTileTool('custom', i);
+    attachTilePreviewHover(btn, 'custom', c, `${c.name} — custom`);
+    if (sim.customMode) {
+      btn.addEventListener('dragstart', (ev) => {
+        const payload = { kind: 'custom', idx: i };
+        _dragPayload = payload;
+        ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
+        ev.dataTransfer.effectAllowed = 'copy';
+        try {
+          const empty = document.createElement('canvas');
+          empty.width = 1; empty.height = 1;
+          ev.dataTransfer.setDragImage(empty, 0, 0);
+        } catch (_) {}
+        btn.classList.add('drag-ghost');
+        showTileDragPreview(ev.clientX, ev.clientY, payload, false);
+      });
+      btn.addEventListener('dragend', () => {
+        btn.classList.remove('drag-ghost');
+        hideTileDragPreview();
+      });
+    }
     wrap.appendChild(btn);
   });
 
-  if (sim.customLibrary.length) {
-    const label = document.createElement('div');
-    label.className = 'tile-section-label';
-    label.textContent = sim.customMode
-      ? 'Personalizados'
-      : 'Personalizados (bloqueados — ative Modo Custom)';
-    wrap.appendChild(label);
-    sim.customLibrary.forEach((c, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'tile-btn';
-      btn.dataset.type = 'custom';
-      btn.dataset.customidx = i;
-      if (!sim.customMode) {
-        btn.disabled = true;
-        btn.style.opacity = '0.45';
-        btn.title = 'Disponível apenas no Modo Custom';
-      }
-      const sw = document.createElement('span');
-      sw.className = 'swatch';
-      const cnv = makeSwatchCanvas();
-      renderTilePreviewToCanvas(cnv, 'custom', c);
-      sw.appendChild(cnv);
-      const lbl = document.createElement('span');
-      lbl.className = 'lbl';
-      const pts = (c.points != null && Number.isFinite(Number(c.points))) ? Number(c.points) : 10;
-      lbl.textContent = `${c.name} (${pts}pts)`;
-      const del = document.createElement('button');
-      del.className = 'del-x';
-      del.textContent = '✕';
-      del.title = 'Excluir ladrilho personalizado';
-      del.onclick = (ev) => {
-        ev.stopPropagation();
-        if (confirm(`Excluir "${c.name}"?`)) {
-          sim.customLibrary.splice(i, 1);
-          persist('obr_custom_tiles', sim.customLibrary);
-          if (sim.selectedTool === 'custom' && sim.placingCustomId === i) { sim.selectedTool = 'straight'; sim.placingCustomId = null; }
-          refreshCustomSelect();
-        }
-      };
-      btn.appendChild(sw);
-      btn.appendChild(lbl);
-      btn.appendChild(del);
-      btn.onclick = () => selectTileTool('custom', i);
-      attachTilePreviewHover(btn, 'custom', c, `${c.name} — personalizado`);
-      wrap.appendChild(btn);
-    });
-  }
-
-  // restaura seleção anterior (ou usa "straight" por padrão na primeira renderização)
-  const stillExists = prevSelected !== 'custom' || (prevCustomIdx != null && sim.customLibrary[prevCustomIdx]);
-  if (prevSelected && stillExists) {
-    selectTileTool(prevSelected, prevSelected === 'custom' ? prevCustomIdx : null);
-  } else if (!prevSelected) {
-    selectTileTool('straight', null);
+  if (prevSelected === 'custom' && prevCustomIdx != null && sim.customLibrary[prevCustomIdx] && sim.customMode) {
+    selectTileTool('custom', prevCustomIdx);
   }
 }
 
@@ -1456,9 +1478,14 @@ function setMode(mode) {
       if (hb) hb.textContent = 'Construtor de robô: corpo + detectores under/forward. +Y = frente.';
     } else if (mode === 'editor') {
       if (!sim.tiles.length) ensureGridMatrix();
+      // Oficial por padrão; App/Custom só quando modo custom
+      setEditorLayer(sim.customMode ? 'tiles' : 'official');
+      updateCustomObjectUI();
+      updateExportHint();
       const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Ctrl+Z/Y desfazer/refazer · Shift+meio=pan · Meio=picker';
+      if (hb) hb.textContent = 'Arraste da paleta · arraste tile para mover/remover · Shift+R anti-horário · Meio=picker · Clique direito=props';
       fitCamera(); draw();
+      schedulePathfinding();
     } else if (mode === 'manual') {
       if (!sim.robot) placeRobotAtStart();
       const hb = document.getElementById('helpBox');
@@ -1537,6 +1564,10 @@ canvas.addEventListener('click', e => {
         sim.objects = sim.objects.filter(o => !(o.gx === gx && o.gy === gy));
         sim.selectedObject = null;
       } else if (sim.objectTool === 'custom') {
+        if (!sim.customMode) {
+          logUI({ t: 0, msg: 'Modo oficial: objetos personalizados bloqueados.', category: 'warning' });
+          return;
+        }
         const osel = document.getElementById('customObjSelect');
         if (osel && osel.value !== '') sim.placingCustomObjId = parseInt(osel.value, 10);
         const oid = sim.placingCustomObjId;
@@ -1588,8 +1619,11 @@ canvas.addEventListener('click', e => {
         fromOfficialPalette: true
       };
       if (type === 'rescue_exit') tile.markFinish = true;
+      tile.gz = sim.currentFloor || 0;
       sim.selectedTile = tile;
-      document.getElementById('selectedInfo').textContent = `oficial ${file} @${gx},${gy}`;
+      document.getElementById('selectedInfo').textContent = `oficial ${file} @${gx},${gy},z${tile.gz}`;
+      if (!sim.shiftDown) clearTileSelection();
+      fillTilePropsPanel(tile);
     } else if (sim.selectedTool === 'custom') {
       // Modo oficial: proíbe colocar ladrilhos personalizados
       if (!sim.customMode) {
@@ -1607,9 +1641,12 @@ canvas.addEventListener('click', e => {
         // token único força recarregar bitmap (evita “custom antigo” na tela)
         tile.custom._instanceId = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
+        tile.gz = sim.currentFloor || 0;
         tile._img = null; tile._imgSrc = null; tile._imgToken = null;
         sim.selectedTile = tile;
-        document.getElementById('selectedInfo').textContent = `custom "${tile.custom.name}" @${gx},${gy}`;
+        document.getElementById('selectedInfo').textContent = `custom "${tile.custom.name}" @${gx},${gy},z${tile.gz}`;
+        if (!sim.shiftDown) clearTileSelection();
+        fillTilePropsPanel(tile);
       }
     } else if (sim.selectedTool && sim.selectedTool !== 'official') {
       tile.type = sim.selectedTool;
@@ -1617,6 +1654,7 @@ canvas.addEventListener('click', e => {
       tile._img = null; tile._imgSrc = null; tile._imgToken = null;
       tile.opts = sim.selectedTool === 'intersection' ? { hasGreen: true } : {};
       tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
+      tile.gz = sim.currentFloor || 0;
       // tipos clássicos também ligam o marcador correspondente
       if (sim.selectedTool === 'start') {
         sim.tiles.forEach(tt => { if (tt !== tile) { tt.markStart = false; } });
@@ -1628,6 +1666,8 @@ canvas.addEventListener('click', e => {
       }
       sim.selectedTile = tile;
       document.getElementById('selectedInfo').textContent = `${tile.type} @${gx},${gy}`;
+      if (!sim.shiftDown && sim.selectedTool) clearTileSelection();
+      fillTilePropsPanel(tile);
     } else {
       const obj = sim.objects.find(o => o.gx === gx && o.gy === gy);
       if (obj) {
@@ -1641,6 +1681,7 @@ canvas.addEventListener('click', e => {
       }
     }
     draw();
+    schedulePathfinding();
   } else if (sim.mode === 'manual' && sim.placingRobot) {
     if (!sim.robot) sim.robot = new Robot(w.x, w.y, 0);
     else { sim.robot.pos.x = w.x; sim.robot.pos.y = w.y; }
@@ -1746,16 +1787,16 @@ canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
   const w = screenToWorld(e.clientX, e.clientY);
   const { gx, gy } = worldToGrid(w.x, w.y);
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (tile) {
-    pushArenaUndo();
-    tile.type = TileType.EMPTY;
-    tile.custom = null;
-    tile._img = null; tile._imgSrc = null;
-    tile.rotation = 0;
-    sim.selectedTile = null;
-    draw();
+  const z = sim.currentFloor || 0;
+  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z)
+    || sim.tiles.find(t => t.gx === gx && t.gy === gy);
+  if (!tile || tile.type === TileType.EMPTY) {
+    hideTileContextMenu();
+    logUI({ t: 0, msg: 'Nenhum ladrilho nesta célula.', category: 'warning' });
+    return;
   }
+  sim.selectedTile = tile;
+  showTileContextMenu(e.clientX, e.clientY, tile);
 });
 
 canvas.addEventListener('wheel', e => {
@@ -2458,26 +2499,42 @@ function renderOfficialPalette() {
     if (status) status.textContent = 'Nenhuma imagem em assets/official-tiles/. Coloque os PNGs oficiais nessa pasta.';
     return;
   }
-  if (status) status.textContent = `${sim.officialTileFiles.length} ladrilhos oficiais disponíveis.`;
+  if (status) status.textContent = `${sim.officialTileFiles.length} ladrilhos · arraste para a grade`;
   sim.officialTileFiles.forEach(({ file, url, type }) => {
     const btn = document.createElement('button');
     btn.className = 'tile-btn';
     btn.dataset.official = file;
-    btn.title = `${file} → ${type}`;
+    btn.dataset.dragKind = 'official';
+    btn.draggable = true;
+    btn.title = `${file} (${type})`;
     if (sim.placingOfficialFile === file && sim.selectedTool === 'official') btn.classList.add('active-tool');
     const sw = document.createElement('span');
     sw.className = 'swatch';
     const img = document.createElement('img');
     img.src = url;
     img.alt = file;
-    img.style.cssText = 'width:40px;height:40px;object-fit:contain;image-rendering:pixelated;display:block';
+    img.draggable = false;
     sw.appendChild(img);
-    const lbl = document.createElement('span');
-    lbl.className = 'lbl';
-    lbl.textContent = file.replace(/\.png$/i, '');
     btn.appendChild(sw);
-    btn.appendChild(lbl);
     btn.onclick = () => selectOfficialTile(file);
+    btn.addEventListener('dragstart', (ev) => {
+      const payload = { kind: 'official', file };
+      _dragPayload = payload;
+      ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
+      ev.dataTransfer.effectAllowed = 'copy';
+      // imagem fantasma transparente — usamos nosso preview
+      try {
+        const empty = document.createElement('canvas');
+        empty.width = 1; empty.height = 1;
+        ev.dataTransfer.setDragImage(empty, 0, 0);
+      } catch (_) {}
+      btn.classList.add('drag-ghost');
+      showTileDragPreview(ev.clientX, ev.clientY, payload, false);
+    });
+    btn.addEventListener('dragend', () => {
+      btn.classList.remove('drag-ghost');
+      hideTileDragPreview();
+    });
     wrap.appendChild(btn);
   });
 }
@@ -2517,6 +2574,10 @@ function updateMirrorUI() {
 
 document.querySelectorAll('#objectTools button').forEach(btn => {
   btn.onclick = () => {
+    if (btn.dataset.obj === 'custom' && !sim.customMode) {
+      logUI({ t: 0, msg: 'Modo oficial: objetos personalizados bloqueados. Ative Modo Custom.', category: 'warning' });
+      return;
+    }
     document.querySelectorAll('#objectTools button').forEach(b => b.classList.remove('active-tool'));
     document.querySelectorAll('#tileTools button').forEach(b => b.classList.remove('active-tool'));
     document.querySelectorAll('#markerTools button').forEach(b => b.classList.remove('active-tool'));
@@ -2605,18 +2666,24 @@ function redoArena() {
   } catch (e) { console.error(e); }
 }
 
-function rotateSelected() {
+function rotateSelected(dir = 1) {
+  // dir > 0: +90° horário; dir < 0: -90° anti-horário (sempre 90°, nunca 180)
+  const step = dir < 0 ? -90 : 90;
+  const norm = (r) => ((Number(r) || 0) + step + 360) % 360;
   if (sim.selectedObject) {
     pushArenaUndo();
-    sim.selectedObject.rotation = ((sim.selectedObject.rotation || 0) + 90) % 360;
+    sim.selectedObject.rotation = norm(sim.selectedObject.rotation);
     document.getElementById('selectedInfo').textContent = `obj ${sim.selectedObject.type} rot=${sim.selectedObject.rotation}°`;
-    draw(); return;
+    draw();
+    schedulePathfinding();
+    return;
   }
   if (!sim.selectedTile) return;
   pushArenaUndo();
-  sim.selectedTile.rotation = (sim.selectedTile.rotation + 90) % 360;
+  sim.selectedTile.rotation = norm(sim.selectedTile.rotation);
   document.getElementById('selectedInfo').textContent = `${sim.selectedTile.type} rot=${sim.selectedTile.rotation}°`;
   draw();
+  schedulePathfinding();
 }
 function mirrorSelected(axis) {
   // Espelhamento só no Modo Custom (evita incompatibilidade com o app oficial)
@@ -2675,37 +2742,55 @@ function downloadJSONFile(filename, data) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-document.getElementById('btnExportJSON').onclick = () => {
-  const data = {
-    gridW: sim.gridW, gridH: sim.gridH,
-    tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
-    objects: sim.objects
-  };
-  downloadJSONFile('obr-arena.json', data);
-  logUI({ t: 0, msg: 'Exportado no formato do trainer (obr-arena.json).', category: 'success' });
-};
-
-document.getElementById('btnExportOfficial')?.addEventListener('click', () => {
+function exportArenaJSON(forceFormat) {
+  // forceFormat: 'official' | 'app' | null (auto by customMode)
+  const format = forceFormat || (sim.customMode ? 'app' : 'official');
   try {
-    const official = convertToOfficialArena({
-      gridW: sim.gridW,
-      gridH: sim.gridH,
-      tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
-      objects: sim.objects,
-      meta: sim.officialMeta || {}
-    });
-    const name = (official.name || 'arena').replace(/[^\w\-]+/g, '_');
-    downloadJSONFile(`${name}-oficial.json`, official);
-    const n = Object.keys(official.tiles || {}).length;
-    logUI({
-      t: 0,
-      msg: `Exportado formato oficial (${n} ladrilhos) → ${name}-oficial.json`,
-      category: 'success'
-    });
+    if (format === 'official') {
+      syncMapMetaFromUI();
+      let official = convertToOfficialArena({
+        gridW: sim.gridW,
+        gridH: sim.gridH,
+        tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
+        objects: sim.objects,
+        meta: sim.officialMeta || {}
+      });
+      const pf = updateTileIndex(official);
+      official = pf.map;
+      const v = validateOfficialMap(official);
+      if (!v.ok) {
+        const msg = v.errors.join('; ');
+        logUI({ t: 0, msg: 'Validação oficial: ' + msg, category: 'warning' });
+        if (!confirm('Aviso de validação:\\n' + msg + '\\n\\nExportar mesmo assim?')) return;
+      }
+      const name = (official.name || 'arena').replace(/[^\\w\\-]+/g, '_');
+      downloadJSONFile(name + '-oficial.json', official);
+      logUI({
+        t: 0,
+        msg: `Exportado RCJ/OBR (${Object.keys(official.tiles || {}).length} tiles, path index=${official.indexCount || 0})`,
+        category: 'success'
+      });
+    } else {
+      const data = {
+        gridW: sim.gridW, gridH: sim.gridH,
+        tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
+        objects: sim.objects,
+        meta: sim.officialMeta || null
+      };
+      downloadJSONFile('obr-arena.json', data);
+      logUI({ t: 0, msg: 'Exportado no formato do trainer (obr-arena.json).', category: 'success' });
+    }
   } catch (err) {
-    alert('Falha ao exportar formato oficial: ' + err.message);
+    alert('Falha ao exportar: ' + err.message);
   }
+}
+
+document.getElementById('btnExport')?.addEventListener('click', () => exportArenaJSON(null));
+document.getElementById('btnExportAlt')?.addEventListener('click', () => {
+  // formato alternativo ao modo atual
+  exportArenaJSON(sim.customMode ? 'official' : 'app');
 });
+
 
 document.getElementById('btnImportJSON').onclick = () => document.getElementById('importFile').click();
 document.getElementById('btnMeasure').onclick = () => {
@@ -2762,7 +2847,9 @@ document.getElementById('importFile').onchange = async e => {
     ensureGridMatrix();
     (data.tiles || data).forEach(o => {
       const t = Tile.fromJSON(o);
-      const idx = sim.tiles.findIndex(x => x.gx === t.gx && x.gy === t.gy);
+      // match by x,y,z when available
+      const idx = sim.tiles.findIndex(x =>
+        x.gx === t.gx && x.gy === t.gy && (x.gz || 0) === (t.gz || 0));
       if (idx >= 0) sim.tiles[idx] = t;
       else sim.tiles.push(t);
     });
@@ -2771,6 +2858,8 @@ document.getElementById('importFile').onchange = async e => {
     sim.customArenaObjects = JSON.parse(JSON.stringify(sim.objects));
     persist('obr_custom_arena', sim.customArena);
     persist('obr_custom_arena_objects', sim.customArenaObjects);
+    if (sim.officialMeta) applyMapMetaToUI();
+    else ensureMapMetaDefaults();
     logUI({ t: 0, msg: 'Arena limpa e importada.', category: 'success' });
     fitCamera();
     draw();
@@ -2995,6 +3084,7 @@ function isTypingTarget(el) {
 window.addEventListener('keydown', e => {
   const typing = isTypingTarget(e.target);
   if (e.code === 'Space' && !typing) { sim.spaceDown = true; e.preventDefault(); }
+  if (e.key === 'Shift') sim.shiftDown = true;
   // 1..6 — switch tabs (não intercepta quando está digitando; aceita teclado numérico)
   const tabKey = (e.key >= '1' && e.key <= '6') ? e.key
     : (e.code && /^Numpad[1-6]$/.test(e.code) ? e.code.slice(-1) : null);
@@ -3037,8 +3127,19 @@ window.addEventListener('keydown', e => {
     if (sim.mode === 'manual') e.preventDefault();
   }
   if (sim.mode === 'editor') {
-    if (e.key === 'r' || e.key === 'R') { rotateSelected(); e.preventDefault(); }
+    if (e.key === 'r' || e.key === 'R') { rotateSelected(e.shiftKey ? -1 : 1); e.preventDefault(); }
     if (e.key === 't' || e.key === 'T') { mirrorSelected('h'); e.preventDefault(); }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (sim.selectedTile && sim.selectedTile.type !== TileType.EMPTY) {
+        e.preventDefault();
+        const t = sim.selectedTile;
+        clearTileAt(t.gx, t.gy, t.gz || 0);
+        sim.selectedTile = null;
+        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
+        document.getElementById('selectedInfo').textContent = '—';
+        logUI({ t: 0, msg: 'Ladrilho apagado (Del)', category: 'info' });
+      }
+    }
     if (e.key === 'Escape') {
       sim.selectedTool = null;
       sim.objectTool = null;
@@ -3053,6 +3154,7 @@ window.addEventListener('keydown', e => {
 });
 window.addEventListener('keyup', e => {
   if (e.code === 'Space') sim.spaceDown = false;
+  if (e.key === 'Shift') sim.shiftDown = false;
   sim.keys[e.key] = false;
 });
 
@@ -4294,13 +4396,18 @@ function applyCustomMode(enabled) {
     }
   }
   updateMirrorUI();
-  // Atualiza estado enabled/disabled dos botões personalizados na paleta
   renderTilePalette();
+  updateCustomObjectUI();
+  updateExportHint();
+  if (!sim.customMode) {
+    // garante camada oficial visível
+    setEditorLayer('official');
+  }
   logUI({
     t: 0,
     msg: sim.customMode
-      ? 'Modo custom ativado — espelhamento e ladrilhos personalizados liberados; import oficial desligado.'
-      : 'Modo custom desativado — espelhamento e ladrilhos personalizados bloqueados; compatibilidade oficial ativa.',
+      ? 'Modo custom ativado — espelhamento, ladrilhos e objetos personalizados liberados.'
+      : 'Modo custom desativado — personalizados bloqueados; export padrão = JSON oficial RCJ/OBR.',
     category: sim.customMode ? 'warning' : 'success'
   });
   draw();
@@ -4346,3 +4453,840 @@ if (toggleCustomEl) {
   setMode('sim');
   loop();
 })();
+
+
+// ═══════════════════════════════════════════════════════════════
+// Compatibilidade RCJ Line Map Editor — meta, andares, modal props
+// ═══════════════════════════════════════════════════════════════
+
+function ensureMapMetaDefaults() {
+  if (!sim.officialMeta) {
+    sim.officialMeta = {
+      name: 'arena',
+      duration: 480,
+      victims: { live: 0, dead: 0 },
+      height: 1,
+      finished: false,
+      tileSet: null,
+      startTile: { x: -1, y: -1, z: -1 },
+      startTile2: { x: -1, y: -1, z: -1 }
+    };
+  }
+}
+
+function applyMapMetaToUI() {
+  ensureMapMetaDefaults();
+  const m = sim.officialMeta;
+  const nameEl = document.getElementById('mapName');
+  const durEl = document.getElementById('mapDuration');
+  const durVal = document.getElementById('mapDurationVal');
+  const liveEl = document.getElementById('mapVictimsLive');
+  const deadEl = document.getElementById('mapVictimsDead');
+  const floorsEl = document.getElementById('mapFloors');
+  const floorsVal = document.getElementById('mapFloorsVal');
+  const finEl = document.getElementById('mapFinished');
+  if (nameEl) nameEl.value = m.name || '';
+  if (durEl) {
+    durEl.value = m.duration != null ? m.duration : 480;
+    if (durVal) durVal.textContent = durEl.value;
+  }
+  if (liveEl) liveEl.value = (m.victims && m.victims.live) || 0;
+  if (deadEl) deadEl.value = (m.victims && m.victims.dead) || 0;
+  if (floorsEl) {
+    floorsEl.value = Math.max(1, m.height || 1);
+    if (floorsVal) floorsVal.textContent = floorsEl.value;
+  }
+  if (finEl) finEl.checked = !!m.finished;
+  rebuildFloorButtons();
+  updateMapValidateHint();
+}
+
+function syncMapMetaFromUI() {
+  ensureMapMetaDefaults();
+  const m = sim.officialMeta;
+  const nameEl = document.getElementById('mapName');
+  const durEl = document.getElementById('mapDuration');
+  const liveEl = document.getElementById('mapVictimsLive');
+  const deadEl = document.getElementById('mapVictimsDead');
+  const floorsEl = document.getElementById('mapFloors');
+  const finEl = document.getElementById('mapFinished');
+  if (nameEl) m.name = nameEl.value || 'arena';
+  if (durEl) m.duration = parseInt(durEl.value, 10) || 480;
+  m.victims = {
+    live: liveEl ? (parseInt(liveEl.value, 10) || 0) : 0,
+    dead: deadEl ? (parseInt(deadEl.value, 10) || 0) : 0
+  };
+  if (floorsEl) m.height = parseInt(floorsEl.value, 10) || 1;
+  if (finEl) m.finished = !!finEl.checked;
+
+  m.startTile = { x: -1, y: -1, z: -1 };
+  m.startTile2 = { x: -1, y: -1, z: -1 };
+  for (const t of sim.tiles || []) {
+    if (t.type === TileType.EMPTY) continue;
+    if (t.markStart || t.type === 'start') {
+      m.startTile = { x: t.gx, y: t.gy, z: t.gz || 0 };
+    }
+    if (t.markStart2) {
+      m.startTile2 = { x: t.gx, y: t.gy, z: t.gz || 0 };
+    }
+  }
+  updateMapValidateHint();
+}
+
+function updateMapValidateHint() {
+  const hint = document.getElementById('mapValidateHint');
+  if (!hint) return;
+  const m = sim.officialMeta || {};
+  const startTile = (sim.tiles || []).find(t => t.type !== TileType.EMPTY && (t.markStart || t.type === 'start'));
+  const hasStart = !!startTile;
+  const st = hasStart
+    ? `Start @(${startTile.gx},${startTile.gy},z${startTile.gz || 0})`
+    : 'Start: nenhum';
+  if (!hasStart) {
+    hint.textContent = `⚠ ${st}. Use menu de contexto ou painel de propriedades. Andar z=${sim.currentFloor || 0}`;
+    hint.style.color = 'var(--red, #ef4444)';
+  } else if (m.finished) {
+    hint.textContent = `✓ Mapa finalizado · ${st} · z=${sim.currentFloor || 0}`;
+    hint.style.color = 'var(--teal, #14b8a6)';
+  } else {
+    hint.textContent = `✓ ${st} · clique direito = propriedades · z=${sim.currentFloor || 0}`;
+    hint.style.color = '';
+  }
+}
+
+function rebuildFloorButtons() {
+  const wrap = document.getElementById('floorButtons');
+  const floorsEl = document.getElementById('mapFloors');
+  if (!wrap) return;
+  const n = floorsEl ? (parseInt(floorsEl.value, 10) || 1) : 1;
+  wrap.innerHTML = '';
+  for (let z = 0; z < n; z++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.floor = String(z);
+    btn.textContent = 'Andar ' + z;
+    if ((sim.currentFloor || 0) === z) btn.classList.add('active-tool');
+    btn.onclick = () => setCurrentFloor(z);
+    wrap.appendChild(btn);
+  }
+}
+
+function setCurrentFloor(z) {
+  sim.currentFloor = z;
+  document.querySelectorAll('#floorButtons button').forEach(b => {
+    b.classList.toggle('active-tool', parseInt(b.dataset.floor, 10) === z);
+  });
+  updateMapValidateHint();
+  draw();
+  logUI({ t: 0, msg: 'Editando andar z=' + z, category: 'info' });
+}
+
+
+let _ctxTile = null;
+
+function hideTileContextMenu() {
+  const m = document.getElementById('tileContextMenu');
+  if (m) m.classList.add('hidden');
+  _ctxTile = null;
+}
+
+function showTileContextMenu(clientX, clientY, tile) {
+  const menu = document.getElementById('tileContextMenu');
+  if (!menu) return;
+  _ctxTile = tile;
+  menu.classList.remove('hidden');
+  const pad = 8;
+  let x = clientX;
+  let y = clientY;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  // measure after visible
+  requestAnimationFrame(() => {
+    const r = menu.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - pad) x = window.innerWidth - r.width - pad;
+    if (y + r.height > window.innerHeight - pad) y = window.innerHeight - r.height - pad;
+    if (x < pad) x = pad;
+    if (y < pad) y = pad;
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+  });
+}
+
+function fillTilePropsPanel(tile) {
+  const body = document.getElementById('tilePropBody');
+  const pos = document.getElementById('tilePropPos');
+  if (!body || !pos) return;
+  if (!tile || tile.type === TileType.EMPTY) {
+    pos.textContent = 'Nenhum ladrilho selecionado. Clique direito → Propriedades.';
+    body.classList.remove('is-active');
+    body.style.opacity = '0.5';
+    body.style.pointerEvents = 'none';
+    return;
+  }
+  sim.selectedTile = tile;
+  body.classList.add('is-active');
+  body.style.opacity = '1';
+  body.style.pointerEvents = 'auto';
+  pos.textContent = `x=${tile.gx}, y=${tile.gy}, z=${tile.gz || 0} · ${tile.type}` +
+    (tile.opts && tile.opts.officialImage ? ` · ${tile.opts.officialImage}` : '') +
+    ` · rot ${tile.rotation || 0}°`;
+
+  const opts = tile.opts || {};
+  document.getElementById('propBumpVal').textContent = String(opts.speedbumps || 0);
+  document.getElementById('propObstVal').textContent = String(opts.obstacles || 0);
+  document.getElementById('propRamp').checked = !!opts.rampPoints;
+  document.getElementById('propCheckpoint').checked = !!tile.markCheckpoint;
+  document.getElementById('propStart').checked = !!tile.markStart;
+  document.getElementById('propStart2').checked = !!tile.markStart2;
+
+  const setRadio = (name, val) => {
+    document.querySelectorAll('input[name="' + name + '"]').forEach(n => {
+      n.checked = (val && n.value === val) || (!val && n.value === '');
+    });
+  };
+  setRadio('levelDown', opts.levelDown || '');
+  setRadio('levelUp', opts.levelUp || '');
+  updateCheckpointAvailability();
+}
+
+function updateCheckpointAvailability() {
+  const wrap = document.getElementById('propCpWrap');
+  const cp = document.getElementById('propCheckpoint');
+  const tile = sim.selectedTile;
+  if (!wrap || !cp || !tile) return;
+  const opts = tile.opts || {};
+  const bump = parseInt(document.getElementById('propBumpVal').textContent, 10) || 0;
+  const obst = parseInt(document.getElementById('propObstVal').textContent, 10) || 0;
+  const ramp = document.getElementById('propRamp').checked;
+  const gaps = opts.officialGaps || 0;
+  const seesaw = opts.officialSeesaw || 0;
+  const inter = opts.officialIntersections || 0;
+  const blocked = bump > 0 || obst > 0 || ramp || gaps > 0 || seesaw > 0 || inter > 0 ||
+    tile.type === 'gap' || tile.type === 'gangorra' ||
+    tile.type === 'intersection' || tile.type === 'intersection_t';
+  cp.disabled = blocked;
+  wrap.style.opacity = blocked ? '0.45' : '1';
+  if (blocked) cp.checked = false;
+}
+
+function applyTilePropsFromPanel() {
+  const tile = sim.selectedTile;
+  if (!tile || tile.type === TileType.EMPTY) return;
+  pushArenaUndo();
+  if (!tile.opts) tile.opts = {};
+  const bump = parseInt(document.getElementById('propBumpVal').textContent, 10) || 0;
+  const obst = parseInt(document.getElementById('propObstVal').textContent, 10) || 0;
+  tile.opts.speedbumps = bump;
+  tile.opts.obstacles = obst;
+  tile.opts.rampPoints = document.getElementById('propRamp').checked;
+  const ld = document.querySelector('input[name="levelDown"]:checked');
+  const lu = document.querySelector('input[name="levelUp"]:checked');
+  tile.opts.levelDown = ld && ld.value ? ld.value : undefined;
+  tile.opts.levelUp = lu && lu.value ? lu.value : undefined;
+
+  const wantStart = document.getElementById('propStart').checked;
+  if (wantStart) {
+    (sim.tiles || []).forEach(tt => { if (tt !== tile) tt.markStart = false; });
+    tile.markStart = true;
+  } else tile.markStart = false;
+  tile.markStart2 = document.getElementById('propStart2').checked;
+  tile.markCheckpoint = !document.getElementById('propCheckpoint').disabled &&
+    document.getElementById('propCheckpoint').checked;
+
+  const z = tile.gz || 0;
+  sim.objects = (sim.objects || []).filter(o =>
+    !(o.gx === tile.gx && o.gy === tile.gy && (o.gz || 0) === z &&
+      (o.type === 'obstacle' || o.type === 'lombada')));
+  for (let i = 0; i < obst; i++) {
+    sim.objects.push({ gx: tile.gx, gy: tile.gy, gz: z, type: 'obstacle', rotation: 0, points: 20 });
+  }
+  for (let i = 0; i < bump; i++) {
+    sim.objects.push({ gx: tile.gx, gy: tile.gy, gz: z, type: 'lombada', rotation: 0, points: 10 });
+  }
+  if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+  fillTilePropsPanel(tile);
+  draw();
+  schedulePathfinding();
+  logUI({ t: 0, msg: `Propriedades aplicadas @${tile.gx},${tile.gy},z${z}`, category: 'info' });
+}
+
+function wireTileContextMenu() {
+  const menu = document.getElementById('tileContextMenu');
+  if (!menu || menu._ctxWired) return;
+  menu._ctxWired = true;
+
+  menu.querySelectorAll('button[data-ctx]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const action = btn.dataset.ctx;
+      const tile = _ctxTile || sim.selectedTile;
+      hideTileContextMenu();
+      if (!tile || tile.type === TileType.EMPTY) return;
+      sim.selectedTile = tile;
+
+      if (action === 'props') {
+        fillTilePropsPanel(tile);
+        document.getElementById('panelTileProps')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+      }
+      if (action === 'rotate-cw') {
+        rotateSelected(1);
+        fillTilePropsPanel(tile);
+        return;
+      }
+      if (action === 'rotate-ccw') {
+        rotateSelected(-1);
+        fillTilePropsPanel(tile);
+        return;
+      }
+      if (action === 'start') {
+        // Marcar como Start (único na arena) — não alterna
+        pushArenaUndo();
+        (sim.tiles || []).forEach(tt => { tt.markStart = false; });
+        tile.markStart = true;
+        if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+        fillTilePropsPanel(tile);
+        draw();
+        schedulePathfinding();
+        logUI({ t: 0, msg: `Start marcado @${tile.gx},${tile.gy},z${tile.gz || 0}`, category: 'success' });
+        return;
+      }
+      if (action === 'start2') {
+        pushArenaUndo();
+        (sim.tiles || []).forEach(tt => { tt.markStart2 = false; });
+        tile.markStart2 = true;
+        if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+        fillTilePropsPanel(tile);
+        draw();
+        schedulePathfinding();
+        logUI({ t: 0, msg: `Start2 marcado @${tile.gx},${tile.gy},z${tile.gz || 0}`, category: 'success' });
+        return;
+      }
+      if (action === 'checkpoint') {
+        pushArenaUndo();
+        tile.markCheckpoint = true;
+        if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+        fillTilePropsPanel(tile);
+        draw();
+        schedulePathfinding();
+        logUI({ t: 0, msg: `Checkpoint marcado @${tile.gx},${tile.gy},z${tile.gz || 0}`, category: 'success' });
+        return;
+      }
+      if (action === 'delete') {
+        clearTileAt(tile.gx, tile.gy, tile.gz || 0);
+        fillTilePropsPanel(null);
+        if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+      }
+    });
+  });
+
+  // Fechar menu ao clicar fora (uma vez só)
+  if (!window._ctxMenuDismissWired) {
+    window._ctxMenuDismissWired = true;
+    document.addEventListener('click', (e) => {
+      const m = document.getElementById('tileContextMenu');
+      if (!m || m.classList.contains('hidden')) return;
+      if (m.contains(e.target)) return;
+      hideTileContextMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideTileContextMenu();
+    });
+  }
+}
+
+function wireTilePropsPanel() {
+  const bumpVal = document.getElementById('propBumpVal');
+  const obstVal = document.getElementById('propObstVal');
+  if (!bumpVal) return;
+  if (bumpVal._propsWired) {
+    wireTileContextMenu();
+    return;
+  }
+  bumpVal._propsWired = true;
+  document.getElementById('propBumpMinus')?.addEventListener('click', () => {
+    bumpVal.textContent = String(Math.max(0, (parseInt(bumpVal.textContent, 10) || 0) - 1));
+    updateCheckpointAvailability();
+  });
+  document.getElementById('propBumpPlus')?.addEventListener('click', () => {
+    bumpVal.textContent = String(Math.min(9, (parseInt(bumpVal.textContent, 10) || 0) + 1));
+    updateCheckpointAvailability();
+  });
+  document.getElementById('propObstMinus')?.addEventListener('click', () => {
+    obstVal.textContent = String(Math.max(0, (parseInt(obstVal.textContent, 10) || 0) - 1));
+    updateCheckpointAvailability();
+  });
+  document.getElementById('propObstPlus')?.addEventListener('click', () => {
+    obstVal.textContent = String(Math.min(9, (parseInt(obstVal.textContent, 10) || 0) + 1));
+    updateCheckpointAvailability();
+  });
+  document.getElementById('propRamp')?.addEventListener('change', updateCheckpointAvailability);
+  document.getElementById('btnTilePropApply')?.addEventListener('click', applyTilePropsFromPanel);
+  wireTileContextMenu();
+}
+
+// Compat: openTilePropModal agora só preenche o painel
+function openTilePropModal(tile) {
+  fillTilePropsPanel(tile);
+}
+
+function wireMapMetaUI() {
+  const dur = document.getElementById('mapDuration');
+  const durVal = document.getElementById('mapDurationVal');
+  if (dur) {
+    dur.oninput = () => { if (durVal) durVal.textContent = dur.value; syncMapMetaFromUI(); };
+  }
+  const floors = document.getElementById('mapFloors');
+  const floorsVal = document.getElementById('mapFloorsVal');
+  if (floors) {
+    floors.oninput = () => {
+      if (floorsVal) floorsVal.textContent = floors.value;
+      const n = parseInt(floors.value, 10) || 1;
+      if ((sim.currentFloor || 0) >= n) setCurrentFloor(n - 1);
+      syncMapMetaFromUI();
+      rebuildFloorButtons();
+    };
+  }
+  ['mapName', 'mapVictimsLive', 'mapVictimsDead', 'mapFinished'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', syncMapMetaFromUI);
+  });
+  ensureMapMetaDefaults();
+  applyMapMetaToUI();
+  wireTilePropsPanel();
+}
+
+try { wireMapMetaUI(); wireTilePropsPanel(); } catch (err) { console.error('wireMapMetaUI', err); }
+
+
+
+// ─── Preview visual ao arrastar ladrilho ─────────────────────
+let _dragPayload = null;
+
+function showTileDragPreview(clientX, clientY, payload, invalid) {
+  const el = document.getElementById('tileDragPreview');
+  const cnv = document.getElementById('tileDragPreviewCanvas');
+  if (!el || !cnv) return;
+  el.classList.remove('hidden');
+  el.classList.toggle('is-invalid', !!invalid);
+  el.style.left = clientX + 'px';
+  el.style.top = clientY + 'px';
+  paintDragPreview(cnv, payload);
+}
+
+function hideTileDragPreview() {
+  const el = document.getElementById('tileDragPreview');
+  if (el) el.classList.add('hidden');
+  _dragPayload = null;
+}
+
+function paintDragPreview(cnv, payload) {
+  if (!payload || !cnv) return;
+  const ctx = cnv.getContext('2d');
+  ctx.clearRect(0, 0, cnv.width, cnv.height);
+  ctx.fillStyle = '#1a2332';
+  ctx.fillRect(0, 0, cnv.width, cnv.height);
+
+  if (payload.kind === 'official' && payload.file) {
+    const img = getCachedOfficialImage(payload.file);
+    if (img && img.complete && img.naturalWidth) {
+      ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
+    } else if (img) {
+      img.onload = () => {
+        ctx.clearRect(0, 0, cnv.width, cnv.height);
+        ctx.fillStyle = '#1a2332';
+        ctx.fillRect(0, 0, cnv.width, cnv.height);
+        ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
+      };
+    }
+    return;
+  }
+  if (payload.kind === 'custom' && payload.idx != null && sim.customLibrary[payload.idx]) {
+    renderTilePreviewToCanvas(cnv, 'custom', sim.customLibrary[payload.idx]);
+    return;
+  }
+  if (payload.kind === 'builtin' && payload.type) {
+    renderTilePreviewToCanvas(cnv, payload.type, null);
+    return;
+  }
+  if (payload.kind === 'move' && payload.tile) {
+    const t = payload.tile;
+    if (t.opts && t.opts.officialImage) {
+      const img = getCachedOfficialImage(t.opts.officialImage);
+      if (img && img.complete) ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
+      else if (img) img.onload = () => ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
+    } else if (t.type === TileType.CUSTOM && t.custom) {
+      renderTilePreviewToCanvas(cnv, 'custom', t.custom);
+    } else {
+      renderTilePreviewToCanvas(cnv, t.type, null);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Drag & drop paleta ↔ grade + pathfinding automático
+// ═══════════════════════════════════════════════════════════════
+
+let _dragMoveFrom = null; // { gx, gy, gz } quando arrasta tile da grade
+let _pathfindTimer = null;
+
+function schedulePathfinding() {
+  if (_pathfindTimer) clearTimeout(_pathfindTimer);
+  _pathfindTimer = setTimeout(runPathfinding, 120);
+}
+
+function runPathfinding() {
+  try {
+    if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
+    const official = convertToOfficialArena({
+      gridW: sim.gridW,
+      gridH: sim.gridH,
+      tiles: (sim.tiles || []).filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
+      objects: sim.objects || [],
+      meta: sim.officialMeta || {}
+    });
+    const { map, indexCount } = updateTileIndex(official);
+    // Espelha index/next de volta nos tiles internos (opts)
+    for (const key of Object.keys(map.tiles || {})) {
+      const ot = map.tiles[key];
+      const parts = key.split(',').map(Number);
+      const [x, y, z] = parts;
+      const tile = (sim.tiles || []).find(t => t.gx === x && t.gy === y && (t.gz || 0) === (z || 0));
+      if (tile) {
+        if (!tile.opts) tile.opts = {};
+        tile.opts.pathIndex = ot.index || [];
+        tile.opts.pathNext = ot.next || [];
+      }
+    }
+    if (sim.officialMeta) {
+      sim.officialMeta.indexCount = indexCount;
+      sim.officialMeta.EvacuationAreaLoPIndex = map.EvacuationAreaLoPIndex;
+    }
+    const hint = document.getElementById('mapValidateHint');
+    if (hint && indexCount > 0) {
+      // não sobrescreve aviso de finished sem start
+      if (!(sim.officialMeta && sim.officialMeta.finished && indexCount === 0)) {
+        const base = hint.textContent || '';
+        if (!base.includes('path')) {
+          /* keep existing validate text */
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('pathfinding:', err);
+  }
+}
+
+function placeTileAt(gx, gy, payload) {
+  if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) return false;
+  const z = sim.currentFloor || 0;
+  let tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z);
+  if (!tile) {
+    tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
+  }
+  if (!tile) {
+    tile = new Tile(gx, gy);
+    tile.gz = z;
+    sim.tiles.push(tile);
+  }
+  pushArenaUndo();
+  tile.gz = z;
+
+  if (payload.kind === 'official') {
+    const file = payload.file;
+    const entry = (sim.officialTileFiles || []).find(x => x.file === file);
+    const type = (entry && entry.type) || classifyOfficialFilename(file);
+    tile.type = type;
+    tile.custom = null;
+    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+    tile.rotation = tile.rotation || 0;
+    tile.mirrorH = false;
+    tile.mirrorV = false;
+    tile.opts = {
+      ...(tile.opts || {}),
+      officialImage: file,
+      officialId: file.replace(/\.png$/i, ''),
+      fromOfficialPalette: true
+    };
+    if (type === 'rescue_exit') tile.markFinish = true;
+    sim.selectedTool = 'official';
+    sim.placingOfficialFile = file;
+  } else if (payload.kind === 'custom') {
+    if (!sim.customMode) {
+      logUI({ t: 0, msg: 'Modo oficial: personalizados bloqueados.', category: 'warning' });
+      return false;
+    }
+    const cid = payload.idx;
+    if (cid == null || !sim.customLibrary[cid]) return false;
+    tile.type = TileType.CUSTOM;
+    tile.custom = JSON.parse(JSON.stringify(sim.customLibrary[cid]));
+    tile.custom._instanceId = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+    tile.opts = tile.opts || {};
+  } else if (payload.kind === 'builtin') {
+    tile.type = payload.type;
+    tile.custom = null;
+    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+    tile.opts = payload.type === 'intersection' ? { hasGreen: true } : {};
+  } else if (payload.kind === 'move') {
+    // handled separately
+    return false;
+  }
+  sim.selectedTile = tile;
+  document.getElementById('selectedInfo').textContent =
+    `${tile.type} @${gx},${gy},z${z}`;
+  draw();
+  schedulePathfinding();
+  fillTilePropsPanel(tile);
+  // Sem Shift: desarma a ferramenta após uma colocação
+  if (!sim.shiftDown) clearTileSelection();
+  return true;
+}
+
+function clearTileAt(gx, gy, gz) {
+  const z = gz != null ? gz : (sim.currentFloor || 0);
+  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z)
+    || sim.tiles.find(t => t.gx === gx && t.gy === gy);
+  if (!tile || tile.type === TileType.EMPTY) return;
+  pushArenaUndo();
+  tile.type = TileType.EMPTY;
+  tile.custom = null;
+  tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+  tile.opts = {};
+  tile.markStart = false; tile.markStart2 = false;
+  tile.markFinish = false; tile.markCheckpoint = false;
+  tile.rotation = 0;
+  sim.objects = (sim.objects || []).filter(o => !(o.gx === gx && o.gy === gy && (o.gz || 0) === z));
+  if (sim.selectedTile === tile) sim.selectedTile = null;
+  draw();
+  schedulePathfinding();
+}
+
+function moveTile(from, toGx, toGy) {
+  if (from.gx === toGx && from.gy === toGy) return;
+  const z = from.gz || 0;
+  const src = sim.tiles.find(t => t.gx === from.gx && t.gy === from.gy && (t.gz || 0) === z);
+  if (!src || src.type === TileType.EMPTY) return;
+  pushArenaUndo();
+  let dst = sim.tiles.find(t => t.gx === toGx && t.gy === toGy && (t.gz || 0) === z);
+  if (!dst) {
+    dst = new Tile(toGx, toGy);
+    dst.gz = z;
+    sim.tiles.push(dst);
+  }
+  // swap contents
+  const fields = ['type', 'custom', 'rotation', 'mirrorH', 'mirrorV', 'opts',
+    'markStart', 'markStart2', 'markFinish', 'markCheckpoint', '_img', '_imgSrc', '_imgToken'];
+  const tmp = {};
+  for (const f of fields) tmp[f] = dst[f];
+  for (const f of fields) dst[f] = src[f];
+  for (const f of fields) src[f] = (f === 'type' ? TileType.EMPTY : (f === 'opts' ? {} : (f.startsWith('mark') ? false : (f === 'rotation' ? 0 : null))));
+  src.mirrorH = false; src.mirrorV = false;
+  // move objects
+  (sim.objects || []).forEach(o => {
+    if (o.gx === from.gx && o.gy === from.gy && (o.gz || 0) === z) {
+      o.gx = toGx; o.gy = toGy;
+    }
+  });
+  sim.selectedTile = dst;
+  draw();
+  schedulePathfinding();
+}
+
+function wireArenaDragDrop() {
+  const wrap = document.getElementById('canvasWrap');
+  if (!wrap || !canvas) return;
+
+  canvas.addEventListener('dragover', (e) => {
+    if (sim.mode !== 'editor') return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = _dragMoveFrom ? 'move' : 'copy';
+    wrap.classList.add('drag-over');
+    const w = screenToWorld(e.clientX, e.clientY);
+    const { gx, gy } = worldToGrid(w.x, w.y);
+    const invalid = gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH;
+    if (_dragPayload || _dragMoveFrom) {
+      const payload = _dragPayload || (_dragMoveFrom ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dragMoveFrom.gx && t.gy === _dragMoveFrom.gy) } : null);
+      if (payload) showTileDragPreview(e.clientX, e.clientY, payload, invalid);
+    }
+  });
+  canvas.addEventListener('dragleave', () => {
+    wrap.classList.remove('drag-over');
+  });
+  // preview follows globally during HTML5 drag
+  document.addEventListener('dragover', (e) => {
+    if (!_dragPayload && !_dragMoveFrom) return;
+    const payload = _dragPayload || (_dragMoveFrom ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dragMoveFrom.gx && t.gy === _dragMoveFrom.gy) } : null);
+    if (payload) showTileDragPreview(e.clientX, e.clientY, payload, false);
+  });
+  document.addEventListener('dragend', () => {
+    hideTileDragPreview();
+    _dragMoveFrom = null;
+  });
+  canvas.addEventListener('drop', (e) => {
+    if (sim.mode !== 'editor') return;
+    e.preventDefault();
+    wrap.classList.remove('drag-over');
+    hideTileDragPreview();
+    const w = screenToWorld(e.clientX, e.clientY);
+    const { gx, gy } = worldToGrid(w.x, w.y);
+
+    // Move from grid?
+    if (_dragMoveFrom) {
+      const from = _dragMoveFrom;
+      _dragMoveFrom = null;
+      if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) {
+        // soltar fora = remover
+        clearTileAt(from.gx, from.gy, from.gz);
+        logUI({ t: 0, msg: `Ladrilho removido @${from.gx},${from.gy}`, category: 'info' });
+        return;
+      }
+      moveTile(from, gx, gy);
+      return;
+    }
+
+    let raw = e.dataTransfer.getData('application/x-obr-tile');
+    if (!raw) raw = e.dataTransfer.getData('text/plain');
+    if (!raw) return;
+    try {
+      const payload = JSON.parse(raw);
+      placeTileAt(gx, gy, payload);
+    } catch (err) {
+      console.warn('drop parse', err);
+    }
+  });
+
+  // Drag existing tile from canvas (HTML5 drag doesn't work on canvas pixels easily —
+  // use pointer-based move: mousedown+drag with Alt, or start on empty tool selection)
+  // Implementação: ao arrastar com botão esquerdo SEM ferramenta ativa, move o tile
+  let moveDrag = null;
+  canvas.addEventListener('mousedown', (e) => {
+    if (sim.mode !== 'editor' || e.button !== 0) return;
+    if (sim.selectedTool || sim.objectTool || sim.markerTool || sim.measureMode) return;
+    const w = screenToWorld(e.clientX, e.clientY);
+    const { gx, gy } = worldToGrid(w.x, w.y);
+    const z = sim.currentFloor || 0;
+    const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z && t.type !== TileType.EMPTY);
+    if (!tile) return;
+    moveDrag = { gx, gy, gz: z, startX: e.clientX, startY: e.clientY, active: false };
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!moveDrag) return;
+    const dist = Math.hypot(e.clientX - moveDrag.startX, e.clientY - moveDrag.startY);
+    if (!moveDrag.active && dist > 8) {
+      moveDrag.active = true;
+      _dragMoveFrom = { gx: moveDrag.gx, gy: moveDrag.gy, gz: moveDrag.gz };
+      const tile = sim.tiles.find(t => t.gx === moveDrag.gx && t.gy === moveDrag.gy && (t.gz || 0) === (moveDrag.gz || 0));
+      _dragPayload = { kind: 'move', tile };
+      canvas.style.cursor = 'grabbing';
+    }
+    if (moveDrag.active) {
+      const tile = sim.tiles.find(t => t.gx === moveDrag.gx && t.gy === moveDrag.gy && (t.gz || 0) === (moveDrag.gz || 0));
+      const w = screenToWorld(e.clientX, e.clientY);
+      const { gx, gy } = worldToGrid(w.x, w.y);
+      const invalid = gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH;
+      showTileDragPreview(e.clientX, e.clientY, { kind: 'move', tile }, invalid);
+    }
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (!moveDrag) return;
+    const was = moveDrag;
+    moveDrag = null;
+    canvas.style.cursor = '';
+    hideTileDragPreview();
+    if (!was.active) {
+      _dragMoveFrom = null;
+      return;
+    }
+    const w = screenToWorld(e.clientX, e.clientY);
+    const { gx, gy } = worldToGrid(w.x, w.y);
+    const from = { gx: was.gx, gy: was.gy, gz: was.gz };
+    _dragMoveFrom = null;
+    // drop outside canvas or invalid = remove (drag-out)
+    const rect = canvas.getBoundingClientRect();
+    const outside = e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom;
+    if (outside || gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) {
+      clearTileAt(from.gx, from.gy, from.gz);
+      logUI({ t: 0, msg: `Ladrilho removido @${from.gx},${from.gy}`, category: 'info' });
+      return;
+    }
+    moveTile(from, gx, gy);
+  });
+
+  // Drop on palette area = remove (drag-out target)
+  const paletteTargets = ['officialTileTools', 'tileTools'];
+  paletteTargets.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (_dragMoveFrom) {
+        clearTileAt(_dragMoveFrom.gx, _dragMoveFrom.gy, _dragMoveFrom.gz);
+        _dragMoveFrom = null;
+      }
+    });
+  });
+}
+
+function updateCustomObjectUI() {
+  const block = document.getElementById('customObjectsBlock');
+  const btn = document.querySelector('#objectToolsCustom button[data-obj="custom"]')
+    || document.querySelector('#objectTools button[data-obj="custom"]');
+  const sel = document.getElementById('customObjSelect');
+  const allow = !!sim.customMode;
+  if (block) block.classList.toggle('hidden', !allow);
+  if (btn) {
+    btn.disabled = !allow;
+    btn.style.opacity = allow ? '1' : '0.45';
+    btn.title = allow ? 'Objeto custom' : 'Disponível apenas no Modo Custom';
+    // re-bind click if in custom block
+    if (!btn._wiredCustom) {
+      btn._wiredCustom = true;
+      btn.onclick = () => {
+        if (!sim.customMode) {
+          logUI({ t: 0, msg: 'Modo oficial: objetos personalizados bloqueados.', category: 'warning' });
+          return;
+        }
+        document.querySelectorAll('#objectTools button, #objectToolsCustom button').forEach(b => b.classList.remove('active-tool'));
+        btn.classList.add('active-tool');
+        sim.objectTool = 'custom';
+        sim.selectedTool = null;
+        sim.markerTool = null;
+        const s = document.getElementById('customObjSelect');
+        if (s && s.value !== '') sim.placingCustomObjId = parseInt(s.value, 10);
+      };
+    }
+  }
+  if (sel) {
+    sel.disabled = !allow;
+    sel.style.opacity = allow ? '1' : '0.45';
+  }
+  if (!allow && sim.objectTool === 'custom') {
+    sim.objectTool = null;
+  }
+}
+
+function updateExportHint() {
+  const el = document.getElementById('exportHint');
+  if (!el) return;
+  el.textContent = sim.customMode
+    ? 'Modo Custom: Exportar = formato do app. «Exportar (outro)» = JSON oficial RCJ. Arraste tiles · Shift+R = anti-horário.'
+    : 'Modo oficial: Exportar = JSON RCJ/OBR (com pathfinding). «Exportar (outro)» = formato do app. Arraste tiles · Shift+R = anti-horário.';
+}
+
+// Pathfinding após colocação por clique (já existente)
+const _origPushArena = typeof pushArenaUndo === 'function' ? null : null;
+
+try {
+  wireArenaDragDrop();
+  updateCustomObjectUI();
+  updateExportHint();
+  // camada oficial por padrão no editor
+  if (typeof setEditorLayer === 'function') {
+    // só se ainda não escolheu
+  }
+} catch (err) {
+  console.error('DnD init', err);
+}

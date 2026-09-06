@@ -75,6 +75,7 @@ export class Tile {
   constructor(gx, gy, type = TileType.EMPTY, opts = {}) {
     this.gx = gx;
     this.gy = gy;
+    this.gz = opts.gz != null ? opts.gz : 0; // andar (z) — formato oficial RCJ
     this.type = type;
     this.opts = opts || {};
     this.rotation = opts.rotation || 0;
@@ -84,20 +85,23 @@ export class Tile {
     this.custom = opts.custom || null;
     // marcadores independentes do tipo de piso (podem coexistir com reta/curva/custom)
     this.markStart = !!opts.markStart;
+    this.markStart2 = !!opts.markStart2; // reinício pós-evacuação (oficial)
     this.markFinish = !!opts.markFinish;
     this.markCheckpoint = !!opts.markCheckpoint;
   }
   get worldX() { return this.gx * TILE_PX; }
   get worldY() { return this.gy * TILE_PX; }
-  get id() { return `${this.gx},${this.gy}`; }
+  get id() { return `${this.gx},${this.gy},${this.gz || 0}`; }
 
   clone() {
-    const t = new Tile(this.gx, this.gy, this.type, { ...this.opts });
+    const t = new Tile(this.gx, this.gy, this.type, { ...this.opts, gz: this.gz });
+    t.gz = this.gz || 0;
     t.rotation = this.rotation;
     t.mirrorH = this.mirrorH;
     t.mirrorV = this.mirrorV;
     t.custom = this.custom ? JSON.parse(JSON.stringify(this.custom)) : null;
     t.markStart = this.markStart;
+    t.markStart2 = this.markStart2;
     t.markFinish = this.markFinish;
     t.markCheckpoint = this.markCheckpoint;
     return t;
@@ -106,6 +110,9 @@ export class Tile {
   /** true se este ladrilho conta como início (tipo ou marcador) */
   isStart() {
     return this.type === TileType.START || this.markStart;
+  }
+  isStart2() {
+    return !!this.markStart2;
   }
   isFinish() {
     return this.type === TileType.FINISH || this.markFinish;
@@ -116,20 +123,23 @@ export class Tile {
 
   toJSON() {
     return {
-      gx: this.gx, gy: this.gy, type: this.type,
+      gx: this.gx, gy: this.gy, gz: this.gz || 0, type: this.type,
       rotation: this.rotation, mirrorH: this.mirrorH, mirrorV: this.mirrorV,
       opts: this.opts, custom: this.custom,
-      markStart: this.markStart, markFinish: this.markFinish, markCheckpoint: this.markCheckpoint
+      markStart: this.markStart, markStart2: this.markStart2,
+      markFinish: this.markFinish, markCheckpoint: this.markCheckpoint
     };
   }
 
   static fromJSON(o) {
-    const t = new Tile(o.gx, o.gy, o.type, o.opts || {});
+    const t = new Tile(o.gx, o.gy, o.type, { ...(o.opts || {}), gz: o.gz || 0 });
+    t.gz = o.gz != null ? o.gz : 0;
     t.rotation = o.rotation || 0;
     t.mirrorH = !!o.mirrorH;
     t.mirrorV = !!o.mirrorV;
     t.custom = o.custom || null;
     t.markStart = !!o.markStart || o.type === TileType.START;
+    t.markStart2 = !!o.markStart2;
     t.markFinish = !!o.markFinish || o.type === TileType.FINISH;
     t.markCheckpoint = !!o.markCheckpoint || o.type === TileType.CHECKPOINT;
     return t;
