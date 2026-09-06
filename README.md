@@ -1,32 +1,76 @@
-# OBR 2026 — Simulador de Treinamento de Juízes (Resgate) v1.0
+# OBR 2026 — Simulador de Treinamento de Juízes (Resgate) v0.01
+
+Ferramenta web para treinar juízes da OBR (Olimpíada Brasileira de Robótica) na modalidade Resgate: montagem de arena, simulação de robô, controle manual e pontuação automática segundo as regras oficiais.
 
 ## Como executar
+
 ```bash
 python3 -m http.server 8080
 ```
+
 Abra: http://localhost:8080
 
-## O que mudou na v1.0 (remake de interface)
+Não requer instalação, build ou dependências externas — roda direto no navegador com HTML5/CSS3/JavaScript puro (ES modules).
 
-- Novo sistema visual padronizado ("console de arbitragem") aplicado às 5 telas: Editor de arena, Simulação, Controle manual, Construtor de ladrilho, Construtor de objeto.
-- Navegação por abas numeradas (1 a 5), refletindo o fluxo de uso recomendado.
-- Guia rápido: botão "?" no topo abre um painel com passo a passo e atalhos — não existia nenhuma instrução na v0.5.
-- Ladrilhos personalizados (criados no Construtor de ladrilho) agora aparecem juntos com os ladrilhos padrão na mesma paleta do Editor de arena, em vez de uma lista separada.
-- Passar o mouse sobre qualquer ladrilho da paleta (padrão ou personalizado) mostra um preview ampliado antes de clicar.
-- Excluir um ladrilho personalizado agora é feito direto na paleta (ícone ✕), sem precisar abrir outro painel.
+## Funcionalidades
 
-## O que NÃO mudou (por design)
+- **Editor de arena**: grade configurável, paleta unificada de ladrilhos (padrão + personalizados + oficiais OBR), posicionamento de objetos, undo/redo
+- **Simulação**: play/pause/step, pontuação automática em tempo real conforme regras OBR, log de eventos
+- **Controle manual**: pilotagem do robô via teclado (WASD/setas) para testes de percurso
+- **Construtor de ladrilho**: criação de ladrilhos customizados em grade 3×3
+- **Construtor de objeto**: criação de objetos (vítimas, obstáculos etc.) em canvas 300×300
+- **Construtor de robô**: definição de corpo e sensores (detectores under/forward)
+- **Catálogo oficial OBR**: importação de ladrilhos e arenas no formato oficial, com conversão automática
+- **Modo Custom**: alterna entre compatibilidade com o formato oficial e edição livre (com espelhamento de ladrilhos)
+- **Backup de dados**: exportação/importação de todos os dados salvos, com opção de limpar tudo
 
-O motor de simulação e pontuação (regras OBR, física do robô, sistema de undo/redo, construtores em pixel 3×3, import/export JSON) foi mantido como está — é a parte que já funcionava corretamente e mexer nela sem poder testar em navegador traria risco desnecessário de quebrar algo. O trabalho desta versão foi 100% na camada de interface/experiência.
+## Atalhos de teclado
 
-## Estrutura
+| Tecla | Ação |
+|---|---|
+| `1`–`6` | Alterna entre abas (Editor, Simulação, Manual, Construtor de Tile, Construtor de Objeto, Construtor de Robô) |
+| `Ctrl+Z` / `Ctrl+Y` | Desfazer / Refazer (arena e construtores) |
+| `R` | Rotacionar |
+| `T` | Espelhar |
+| `Esc` | Cancelar ferramenta ativa |
+| `Espaço` (segurar) | Pan pela arena |
+| `Shift` + botão do meio | Pan (alternativa) |
+| Botão do meio | Conta-gotas (picker) |
+
+## Estrutura do projeto
+
 ```
 /
 ├── index.html
-├── css/style.css
-└── js/
-    ├── main.js
-    └── engine/
-        ├── Models.js
-        └── ScoreEngine.js
+├── css/
+│   └── style.css
+├── js/
+│   ├── main.js                    # lógica principal, UI, eventos
+│   ├── engine/
+│   │   ├── Models.js               # Tile, Robot, Vec, TileType
+│   │   └── ScoreEngine.js          # regras de pontuação OBR
+│   ├── io/
+│   │   ├── officialTileClassifier.js   # classifica ladrilhos do formato oficial
+│   │   └── officialArenaAdapter.js     # converte arenas do formato oficial
+│   └── storage/
+│       └── DataManager.js          # persistência (localStorage + IndexedDB)
+└── assets/
+    └── official-tiles/             # imagens do catálogo oficial OBR
 ```
+
+## Persistência de dados
+
+Todos os dados (ladrilhos, arenas, objetos e robôs personalizados) são salvos localmente no navegador via `localStorage` e `IndexedDB` — nada é enviado para servidor. Use o painel **Backup & dados** para exportar/importar um backup completo entre máquinas ou navegadores.
+
+## Histórico de versões
+
+- **v0.01** — Catálogo de ladrilhos oficiais OBR, modo custom, backup/restauração completa de dados, migração de persistência para IndexedDB
+- **v0.00** — Reestruturação completa da interface ("console de arbitragem"): navegação por abas, paleta unificada de ladrilhos, preview em hover, painel de ajuda integrado
+
+## Escopo
+
+O motor de simulação e pontuação (regras OBR, física do robô, sistema de undo/redo, formato de import/export) é mantido estável entre versões — as mudanças de cada release se concentram na camada de interface, dados e integração com o formato oficial.
+
+## Requisitos
+
+Navegador moderno com suporte a ES Modules, Canvas 2D e IndexedDB. Sem dependências de build (não usa npm/webpack) — basta servir os arquivos estáticos.
