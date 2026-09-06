@@ -1285,13 +1285,25 @@ function positionTilePreview(btn) {
 }
 
 function selectTileTool(type, customIdx) {
+  // Modo oficial: não permite armar ferramenta de ladrilho personalizado
+  if (type === 'custom' && !sim.customMode) {
+    logUI({
+      t: 0,
+      msg: 'Modo oficial ativo: ladrilhos personalizados bloqueados. Ative Modo Custom em Backup & dados.',
+      category: 'warning'
+    });
+    return;
+  }
   sim.selectedTool = type;
   sim.objectTool = null;
   sim.markerTool = null;
+  sim.placingOfficialFile = null;
   if (type === 'custom') sim.placingCustomId = customIdx;
+  else sim.placingCustomId = null;
   document.querySelectorAll('#tileTools button').forEach(b => {
     b.classList.toggle('active-tool', b.dataset.type === type && (type !== 'custom' || parseInt(b.dataset.customidx) === customIdx));
   });
+  document.querySelectorAll('#officialTileTools button').forEach(b => b.classList.remove('active-tool'));
   document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
 }
 
@@ -1330,13 +1342,20 @@ function renderTilePalette() {
   if (sim.customLibrary.length) {
     const label = document.createElement('div');
     label.className = 'tile-section-label';
-    label.textContent = 'Personalizados';
+    label.textContent = sim.customMode
+      ? 'Personalizados'
+      : 'Personalizados (bloqueados — ative Modo Custom)';
     wrap.appendChild(label);
     sim.customLibrary.forEach((c, i) => {
       const btn = document.createElement('button');
       btn.className = 'tile-btn';
       btn.dataset.type = 'custom';
       btn.dataset.customidx = i;
+      if (!sim.customMode) {
+        btn.disabled = true;
+        btn.style.opacity = '0.45';
+        btn.title = 'Disponível apenas no Modo Custom';
+      }
       const sw = document.createElement('span');
       sw.className = 'swatch';
       const cnv = makeSwatchCanvas();
@@ -1572,6 +1591,15 @@ canvas.addEventListener('click', e => {
       sim.selectedTile = tile;
       document.getElementById('selectedInfo').textContent = `oficial ${file} @${gx},${gy}`;
     } else if (sim.selectedTool === 'custom') {
+      // Modo oficial: proíbe colocar ladrilhos personalizados
+      if (!sim.customMode) {
+        logUI({
+          t: 0,
+          msg: 'Modo oficial ativo: apenas ladrilhos do catálogo OBR. Ative Modo Custom em Backup & dados para usar personalizados.',
+          category: 'warning'
+        });
+        return;
+      }
       const cid = sim.placingCustomId;
       if (cid != null && Number.isFinite(cid) && sim.customLibrary[cid]) {
         tile.type = TileType.CUSTOM;
@@ -1666,26 +1694,30 @@ canvas.addEventListener('auxclick', e => {
   const { gx, gy } = worldToGrid(w.x, w.y);
   const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
   if (!tile || tile.type === TileType.EMPTY) return;
-  sim.selectedTool = tile.type;
-  document.querySelectorAll('#tileTools button').forEach(b => {
-    b.classList.toggle('active-tool', b.dataset.type === tile.type);
-  });
-  // objetos sobre este ladrilho
-  const objsHere = sim.objects.filter(o => o.gx === gx && o.gy === gy);
-  for (const o of objsHere) {
-    const oid = 'obj-' + o.gx + ',' + o.gy + '-' + o.type;
-    let pts = 0;
-    if (o.type === 'obstacle') pts = o.points != null ? o.points : 20;
-    else if (o.type === 'gangorra') pts = o.points != null ? o.points : 20;
-    else if (o.type === 'rampa') pts = o.points != null ? o.points : 10;
-    else if (o.type === 'custom') pts = (o.custom && o.custom.points != null) ? o.custom.points : (o.points != null ? o.points : 0);
-    if (pts !== 0 || o.type === 'custom') {
-      const pev = sim.score.scoreHazard(oid, pts, `Objeto ${o.type}${o.custom && o.custom.name ? ' "' + o.custom.name + '"' : ''} (${pts})`, sim.time);
-      if (pev) { logUI(pev); updateScoreUI(); }
-    }
+
+  sim.selectedTile = tile;
+  sim.objectTool = null;
+  sim.markerTool = null;
+  document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
+
+  // Ladrilho oficial (skin do catálogo OBR)
+  if (tile.opts && tile.opts.officialImage) {
+    const file = tile.opts.officialImage;
+    setEditorLayer('official');
+    // garante paleta carregada antes de destacar o botão
+    ensureOfficialPalette().then(() => {
+      selectOfficialTile(file);
+      document.getElementById('selectedInfo').textContent =
+        `oficial ${file} @${gx},${gy} rot=${tile.rotation || 0}`;
+      logUI({ t: 0, msg: `Picker: oficial ${file}`, category: 'info' });
+      draw();
+    });
+    return;
   }
 
+  // Ladrilho personalizado
   if (tile.type === TileType.CUSTOM && tile.custom) {
+    setEditorLayer('tiles');
     let idx = sim.customLibrary.findIndex(c => c.name === tile.custom.name);
     if (idx < 0) {
       sim.customLibrary.push(JSON.parse(JSON.stringify(tile.custom)));
@@ -1693,8 +1725,18 @@ canvas.addEventListener('auxclick', e => {
       refreshCustomSelect();
     }
     selectTileTool('custom', idx);
+    document.getElementById('selectedInfo').textContent =
+      `custom "${tile.custom.name}" @${gx},${gy}`;
+    logUI({ t: 0, msg: `Picker: custom "${tile.custom.name}"`, category: 'info' });
+    draw();
+    return;
   }
-  sim.selectedTile = tile;
+
+  // Ladrilho padrão do app
+  setEditorLayer('tiles');
+  selectTileTool(tile.type, null);
+  document.getElementById('selectedInfo').textContent =
+    `${tile.type} @${gx},${gy} rot=${tile.rotation || 0}`;
   logUI({ t: 0, msg: `Picker: ${tile.type}`, category: 'info' });
   draw();
 });
@@ -2397,6 +2439,7 @@ async function loadOfficialTileCatalog() {
 function selectOfficialTile(file) {
   sim.selectedTool = 'official';
   sim.placingOfficialFile = file;
+  sim.placingCustomId = null;
   sim.objectTool = null;
   sim.markerTool = null;
   document.querySelectorAll('#tileTools button, #officialTileTools button').forEach(b => b.classList.remove('active-tool'));
@@ -2938,14 +2981,26 @@ document.getElementById('btnCtorSave').onclick = () => {
   refreshCustomSelect();
 };
 
+/** True quando o foco está em campo editável — atalhos globais não devem roubar a tecla. */
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if (el.isContentEditable) return true;
+  // inputs type=range etc. ainda contam; também cobre shadow/custom elements
+  if (el.closest && el.closest('[contenteditable="true"]')) return true;
+  return false;
+}
+
 window.addEventListener('keydown', e => {
-  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
-  const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
+  const typing = isTypingTarget(e.target);
   if (e.code === 'Space' && !typing) { sim.spaceDown = true; e.preventDefault(); }
-  // 1..6 — switch tabs (não intercepta quando está digitando)
-  if (!typing && e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  // 1..6 — switch tabs (não intercepta quando está digitando; aceita teclado numérico)
+  const tabKey = (e.key >= '1' && e.key <= '6') ? e.key
+    : (e.code && /^Numpad[1-6]$/.test(e.code) ? e.code.slice(-1) : null);
+  if (!typing && tabKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const modes = ['editor', 'sim', 'manual', 'constructor', 'objconstructor', 'robot'];
-    const idx = parseInt(e.key) - 1;
+    const idx = parseInt(tabKey, 10) - 1;
     setMode(modes[idx]);
     e.preventDefault();
     return;
@@ -4229,17 +4284,23 @@ function applyCustomMode(enabled) {
   persist('obr_custom_mode', sim.customMode);
   const tog = document.getElementById('toggleCustomMode');
   if (tog) tog.checked = sim.customMode;
-  // Ao sair do modo custom, zera espelhamentos (compatibilidade oficial)
+  // Ao sair do modo custom, zera espelhamentos e desarma ferramenta custom
   if (!sim.customMode) {
     (sim.tiles || []).forEach(t => { t.mirrorH = false; t.mirrorV = false; });
     (sim.objects || []).forEach(o => { o.mirrorH = false; o.mirrorV = false; });
+    if (sim.selectedTool === 'custom') {
+      sim.selectedTool = 'straight';
+      sim.placingCustomId = null;
+    }
   }
   updateMirrorUI();
+  // Atualiza estado enabled/disabled dos botões personalizados na paleta
+  renderTilePalette();
   logUI({
     t: 0,
     msg: sim.customMode
-      ? 'Modo custom ativado — espelhamento liberado; import oficial desligado.'
-      : 'Modo custom desativado — espelhamento bloqueado; compatibilidade oficial ativa.',
+      ? 'Modo custom ativado — espelhamento e ladrilhos personalizados liberados; import oficial desligado.'
+      : 'Modo custom desativado — espelhamento e ladrilhos personalizados bloqueados; compatibilidade oficial ativa.',
     category: sim.customMode ? 'warning' : 'success'
   });
   draw();
