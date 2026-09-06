@@ -114,11 +114,12 @@ function update(sensors, dt) {
       <div id="panelEditor" class="hidden">
         <div class="panel">
           <h2>Modo de edição</h2>
-          <div class="controls" style="gap:0.35rem">
-            <button id="btnShowTiles" class="primary active-tool" style="flex:1">Ladrilhos</button>
+          <div class="controls" style="gap:0.35rem;flex-wrap:wrap">
+            <button id="btnShowTiles" class="primary active-tool" style="flex:1">App</button>
+            <button id="btnShowOfficial" style="flex:1">Oficiais</button>
             <button id="btnShowObjects" style="flex:1">Objetos</button>
           </div>
-          <p class="key-hint">Escolha o que deseja editar na arena.</p>
+          <p class="key-hint">App = ladrilhos do trainer · Oficiais = catálogo OBR · Objetos = sobre o piso.</p>
         </div>
         <div id="editorTilesSection">
           <div class="panel">
@@ -135,6 +136,14 @@ function update(sensors, dt) {
               <button data-mark="clear">Limpar marcadores</button>
             </div>
             <p class="key-hint">Clique num ladrilho existente para ligar/desligar o marcador sem mudar o piso.</p>
+          </div>
+        </div>
+        <div id="editorOfficialSection" class="hidden">
+          <div class="panel">
+            <h2>Ladrilhos oficiais OBR</h2>
+            <p class="key-hint" style="text-align:left">Imagens de <code>assets/official-tiles/</code>. Espelhamento desligado (compatibilidade). Ative <b>Modo Custom</b> para espelhar.</p>
+            <div id="officialTileTools" class="tile-tools" style="max-height:420px;overflow:auto"></div>
+            <p class="key-hint" id="officialTileStatus">Carregando catálogo…</p>
           </div>
         </div>
         <div id="editorObjectsSection" class="hidden">
@@ -156,19 +165,22 @@ function update(sensors, dt) {
           <h2>Transformar selecionado</h2>
           <div class="transform-btns">
             <button id="btnRotate">↻ 90°</button>
-            <button id="btnMirrorH">↔ H</button>
-            <button id="btnMirrorV">↕ V</button>
+            <button id="btnMirrorH" title="Só no Modo Custom">↔ H</button>
+            <button id="btnMirrorV" title="Só no Modo Custom">↕ V</button>
           </div>
+          <p class="key-hint" id="mirrorHint">Espelhamento: desativado (ative Modo Custom para usar).</p>
         </div>
         <div class="panel">
           <h2>Ações</h2>
           <div class="controls">
             <button id="btnClearArena" class="danger">Limpar</button>
             <button id="btnSaveArena" class="success">Salvar</button>
-            <button id="btnExportJSON">Exportar</button>
+            <button id="btnExportJSON">Exportar (app)</button>
+            <button id="btnExportOfficial" class="primary">Exportar (oficial)</button>
             <button id="btnImportJSON">Importar</button>
             <button id="btnMeasure">Medir (mm)</button>
           </div>
+          <p class="key-hint">Import aceita JSON do app ou do construtor oficial. Export oficial gera o formato do app OBR.</p>
           <p class="key-hint" id="measureHint">Medir: 2 cliques na arena. Esc cancela.</p>
           <input type="file" id="importFile" accept=".json,application/json" class="hidden">
         </div>
@@ -400,6 +412,20 @@ function update(sensors, dt) {
 
       <!-- COMMON -->
       <div class="panel">
+        <h2>Backup &amp; dados</h2>
+        <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.72rem;margin-bottom:0.45rem;cursor:pointer">
+          <input type="checkbox" id="toggleCustomMode">
+          Modo Custom (desliga formato oficial)
+        </label>
+        <p class="key-hint" style="margin-top:0">Com o modo custom ativo, importar JSON do construtor oficial é recusado.</p>
+        <div class="controls" style="flex-direction:column;gap:0.3rem;margin-top:0.35rem">
+          <button id="btnExportBackup" class="success" style="width:100%">Exportar backup completo</button>
+          <button id="btnImportBackup" class="primary" style="width:100%">Importar backup</button>
+          <button id="btnClearAllData" class="danger" style="width:100%">Limpar todos os dados</button>
+        </div>
+        <div id="backupStatus" style="margin-top:0.4rem;padding:0.35rem;border-radius:4px;font-size:0.7rem;color:var(--muted)"></div>
+      </div>
+      <div class="panel">
         <h2>Pontuação</h2>
         <div class="score-display" id="totalScore">0</div>
         <div class="score-breakdown">
@@ -474,6 +500,6 @@ function update(sensors, dt) {
     </div>
   </div>
 
-  <script type="module" src="js/main.js?v=1.0"></script>
+  <script type="module" src="js/main.js?v=1.5"></script>
 </body>
 </html>

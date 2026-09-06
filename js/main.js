@@ -3,9 +3,28 @@
  * - Camera: fit / zoom / pan (arena nunca cortada)
  * - Grid resize preserva ladrilhos
  * - Spec: R/T/Esc, picker, import/export
+ * - IndexedDB + compatibilidade formato oficial + modo custom
  */
 import { TILE_PX, LINE_W, Vec, Tile, Robot, TileType, TILE_LABELS, transformPoint, inverseTransform } from './engine/Models.js';
 import { ScoreEngine } from './engine/ScoreEngine.js';
+import { DataManager } from './storage/DataManager.js';
+import {
+  isOfficialArenaFormat,
+  convertOfficialArena,
+  convertToOfficialArena,
+  getCachedOfficialImage,
+  preloadOfficialImage
+} from './io/officialArenaAdapter.js';
+
+const dataManager = new DataManager();
+
+/** Persiste chave (localStorage imediato + IndexedDB assíncrono) */
+function persist(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) { /* quota */ }
+  dataManager.saveKey(key, value).catch(() => {});
+}
 
 const canvas = document.getElementById('arena');
 const ctx = canvas.getContext('2d');
@@ -157,7 +176,9 @@ const sim = {
   activeRobotDef: null,
   controlMode: 'path', // 'path' | 'script'
   scriptFn: null,
-  scriptError: null
+  scriptError: null,
+  customMode: false, // true = desliga compatibilidade com formato oficial
+  officialMeta: null // metadados do último import oficial (name, duration, victims, tileSet…)
 };
 
 // ─── Scenarios ───────────────────────────────────────────────
@@ -765,6 +786,29 @@ function drawTileMarkers(t) {
 
 function drawTile(t) {
   const x = t.worldX, y = t.worldY, cx = x + TILE_PX / 2, cy = y + TILE_PX / 2;
+
+  // Skin oficial (se não estiver em modo custom e houver officialImage)
+  if (!sim.customMode && t.opts && t.opts.officialImage) {
+    const img = getCachedOfficialImage(t.opts.officialImage);
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((t.rotation * Math.PI) / 180);
+      if (t.mirrorH) ctx.scale(-1, 1);
+      if (t.mirrorV) ctx.scale(1, -1);
+      ctx.drawImage(img, -TILE_PX / 2, -TILE_PX / 2, TILE_PX, TILE_PX);
+      ctx.restore();
+      drawTileMarkers(t);
+      return;
+    }
+    if (img && !img.complete) {
+      img.onload = () => draw();
+    } else if (!img) {
+      preloadOfficialImage(t.opts.officialImage);
+    }
+    // fallback: continua com desenho nativo do app
+  }
+
   ctx.fillStyle = '#f1f5f9';
   ctx.strokeStyle = '#cbd5e1';
   ctx.lineWidth = 1 / cam.scale;
@@ -1088,7 +1132,7 @@ function refreshCustomSelect() {
         const i = parseInt(btn.dataset.del);
         if (confirm(`Excluir "${sim.customLibrary[i].name}"?`)) {
           sim.customLibrary.splice(i, 1);
-          try { localStorage.setItem('obr_custom_tiles', JSON.stringify(sim.customLibrary)); } catch (e) {}
+          persist('obr_custom_tiles', sim.customLibrary);
           refreshCustomSelect();
         }
       };
@@ -1310,7 +1354,7 @@ function renderTilePalette() {
         ev.stopPropagation();
         if (confirm(`Excluir "${c.name}"?`)) {
           sim.customLibrary.splice(i, 1);
-          try { localStorage.setItem('obr_custom_tiles', JSON.stringify(sim.customLibrary)); } catch (e) {}
+          persist('obr_custom_tiles', sim.customLibrary);
           if (sim.selectedTool === 'custom' && sim.placingCustomId === i) { sim.selectedTool = 'straight'; sim.placingCustomId = null; }
           refreshCustomSelect();
         }
@@ -1336,56 +1380,78 @@ function renderTilePalette() {
 function setMode(mode) {
   sim.mode = mode;
   sim.running = false;
-  ['sim', 'editor', 'manual', 'constructor'].forEach(m => {
-    const tab = document.getElementById('tab' + m.charAt(0).toUpperCase() + m.slice(1));
-    const panel = document.getElementById('panel' + m.charAt(0).toUpperCase() + m.slice(1));
-    if (tab) tab.classList.toggle('active', mode === m);
-    if (panel) panel.classList.toggle('hidden', mode !== m);
-  });
-  // fix tab ids
-  document.getElementById('tabSim').classList.toggle('active', mode === 'sim');
-  document.getElementById('tabEditor').classList.toggle('active', mode === 'editor');
-  document.getElementById('tabManual').classList.toggle('active', mode === 'manual');
-  document.getElementById('tabConstructor').classList.toggle('active', mode === 'constructor');
-  const tabObj = document.getElementById('tabObjConstructor');
-  if (tabObj) tabObj.classList.toggle('active', mode === 'objconstructor');
-  const tabRobot = document.getElementById('tabRobot');
-  if (tabRobot) tabRobot.classList.toggle('active', mode === 'robot');
-  document.getElementById('panelSim').classList.toggle('hidden', mode !== 'sim');
-  document.getElementById('panelEditor').classList.toggle('hidden', mode !== 'editor');
-  document.getElementById('panelManual').classList.toggle('hidden', mode !== 'manual');
-  document.getElementById('panelConstructor').classList.toggle('hidden', mode !== 'constructor');
-  const panelObj = document.getElementById('panelObjConstructor');
-  if (panelObj) panelObj.classList.toggle('hidden', mode !== 'objconstructor');
-  const panelRobot = document.getElementById('panelRobot');
-  if (panelRobot) panelRobot.classList.toggle('hidden', mode !== 'robot');
 
-  document.getElementById('simMode').textContent =
-    { sim: 'Simulação', editor: 'Editor', manual: 'Manual', constructor: 'Construtor Tile', objconstructor: 'Construtor Obj', robot: 'Construtor Robô' }[mode];
-  document.getElementById('simState').textContent = 'Parado';
+  // Abas
+  document.getElementById('tabSim')?.classList.toggle('active', mode === 'sim');
+  document.getElementById('tabEditor')?.classList.toggle('active', mode === 'editor');
+  document.getElementById('tabManual')?.classList.toggle('active', mode === 'manual');
+  document.getElementById('tabConstructor')?.classList.toggle('active', mode === 'constructor');
+  document.getElementById('tabObjConstructor')?.classList.toggle('active', mode === 'objconstructor');
+  document.getElementById('tabRobot')?.classList.toggle('active', mode === 'robot');
+
+  // Painéis laterais
+  document.getElementById('panelSim')?.classList.toggle('hidden', mode !== 'sim');
+  document.getElementById('panelEditor')?.classList.toggle('hidden', mode !== 'editor');
+  document.getElementById('panelManual')?.classList.toggle('hidden', mode !== 'manual');
+  document.getElementById('panelConstructor')?.classList.toggle('hidden', mode !== 'constructor');
+  document.getElementById('panelObjConstructor')?.classList.toggle('hidden', mode !== 'objconstructor');
+  document.getElementById('panelRobot')?.classList.toggle('hidden', mode !== 'robot');
+
+  const modeLabels = {
+    sim: 'Simulação',
+    editor: 'Editor',
+    manual: 'Manual',
+    constructor: 'Construtor Tile',
+    objconstructor: 'Construtor Obj',
+    robot: 'Construtor Robô'
+  };
+  const simModeEl = document.getElementById('simMode');
+  if (simModeEl) simModeEl.textContent = modeLabels[mode] || mode;
+  const simStateEl = document.getElementById('simState');
+  if (simStateEl) simStateEl.textContent = 'Parado';
+
+  // Fecha todos os construtores (só esconde canvases extras)
   closeConstructorTab();
   closeObjConstructorTab();
   closeRobotConstructorTab();
-  if (mode === 'constructor') {
-    openConstructorTab();
-    document.getElementById('helpBox').textContent = 'Construtor de ladrilho 3×3. Shift+meio=pan · Scroll=zoom';
-  } else if (mode === 'objconstructor') {
-    openObjConstructorTab();
-    document.getElementById('helpBox').textContent = 'Construtor de objeto 300×300. Só pincel/cores. Ctrl+Z/Y';
-  } else if (mode === 'robot') {
-    openRobotConstructorTab();
-    document.getElementById('helpBox').textContent = 'Construtor de robô: corpo + detectores under/forward. +Y = frente.';
-  } else if (mode === 'editor') {
-    if (!sim.tiles.length) { ensureGridMatrix(); }
-    document.getElementById('helpBox').textContent = 'Ctrl+Z/Y desfazer/refazer · Shift+meio=pan · Meio=picker';
-    fitCamera(); draw();
-  } else if (mode === 'manual') {
-    if (!sim.robot) placeRobotAtStart();
-    document.getElementById('helpBox').textContent = 'WASD/setas. Após chegada use Voltar ao Início.';
-    fitCamera(); draw();
-  } else {
-    document.getElementById('helpBox').textContent = 'Play/Pause/Step. Zoom Fit para ver tudo.';
-    fitCamera(); draw();
+
+  const isCtorMode = mode === 'constructor' || mode === 'objconstructor' || mode === 'robot';
+  if (!isCtorMode) {
+    // Volta a arena principal
+    document.getElementById('arena')?.classList.remove('hidden');
+    document.getElementById('arenaZoomBar')?.classList.remove('hidden');
+  }
+
+  try {
+    if (mode === 'constructor') {
+      openConstructorTab();
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'Construtor de ladrilho 3×3. Shift+meio=pan · Scroll=zoom';
+    } else if (mode === 'objconstructor') {
+      openObjConstructorTab();
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'Construtor de objeto 300×300. Só pincel/cores. Ctrl+Z/Y';
+    } else if (mode === 'robot') {
+      openRobotConstructorTab();
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'Construtor de robô: corpo + detectores under/forward. +Y = frente.';
+    } else if (mode === 'editor') {
+      if (!sim.tiles.length) ensureGridMatrix();
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'Ctrl+Z/Y desfazer/refazer · Shift+meio=pan · Meio=picker';
+      fitCamera(); draw();
+    } else if (mode === 'manual') {
+      if (!sim.robot) placeRobotAtStart();
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'WASD/setas. Após chegada use Voltar ao Início.';
+      fitCamera(); draw();
+    } else {
+      const hb = document.getElementById('helpBox');
+      if (hb) hb.textContent = 'Play/Pause/Step. Zoom Fit para ver tudo.';
+      fitCamera(); draw();
+    }
+  } catch (err) {
+    console.error('setMode error:', mode, err);
   }
 }
 
@@ -1477,14 +1543,34 @@ canvas.addEventListener('click', e => {
     }
 
     // --- camada de LADRILHOS ---
-    if (sim.selectedTool === 'erase' || sim.selectedTool === 'custom' || sim.selectedTool) {
+    if (sim.selectedTool === 'erase' || sim.selectedTool === 'custom' || sim.selectedTool === 'official' || sim.selectedTool) {
       pushArenaUndo();
     }
     if (sim.selectedTool === 'erase') {
       tile.type = TileType.EMPTY; tile.custom = null; tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
       tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+      tile.opts = {};
       tile.markStart = false; tile.markFinish = false; tile.markCheckpoint = false;
       sim.selectedTile = null;
+    } else if (sim.selectedTool === 'official' && sim.placingOfficialFile) {
+      const file = sim.placingOfficialFile;
+      const entry = (sim.officialTileFiles || []).find(x => x.file === file);
+      const type = (entry && entry.type) || classifyOfficialFilename(file);
+      tile.type = type;
+      tile.custom = null;
+      tile._img = null; tile._imgSrc = null; tile._imgToken = null;
+      // espelhamento sempre desligado para peças oficiais (compatibilidade)
+      tile.rotation = 0;
+      tile.mirrorH = false;
+      tile.mirrorV = false;
+      tile.opts = {
+        officialImage: file,
+        officialId: file.replace(/\.png$/i, ''),
+        fromOfficialPalette: true
+      };
+      if (type === 'rescue_exit') tile.markFinish = true;
+      sim.selectedTile = tile;
+      document.getElementById('selectedInfo').textContent = `oficial ${file} @${gx},${gy}`;
     } else if (sim.selectedTool === 'custom') {
       const cid = sim.placingCustomId;
       if (cid != null && Number.isFinite(cid) && sim.customLibrary[cid]) {
@@ -1497,7 +1583,7 @@ canvas.addEventListener('click', e => {
         sim.selectedTile = tile;
         document.getElementById('selectedInfo').textContent = `custom "${tile.custom.name}" @${gx},${gy}`;
       }
-    } else if (sim.selectedTool) {
+    } else if (sim.selectedTool && sim.selectedTool !== 'official') {
       tile.type = sim.selectedTool;
       tile.custom = null;
       tile._img = null; tile._imgSrc = null; tile._imgToken = null;
@@ -1688,25 +1774,38 @@ function clearCtorBuffer() {
 }
 
 function openConstructorTab() {
-  if (!ctor.buf) initCtorBuffer();
-  document.getElementById('arena').classList.add('hidden');
-  document.getElementById('arenaZoomBar').classList.add('hidden');
-  ctorCanvas.classList.remove('hidden');
-  document.getElementById('ctorZoomBar').classList.remove('hidden');
-  // sync UI
-  setGridLock(ctor.gridLock || 10);
-  document.getElementById('brushSize').value = ctor.brush;
-  document.getElementById('brushSizeLabel').textContent = ctor.brush + ' mm';
-  document.getElementById('activeColorSwatch').style.background = ctor.color;
-  fitCtorCanvas();
-  drawCtor();
+  try {
+    if (!ctor.buf) initCtorBuffer();
+    // Esconde todos os outros canvases
+    document.getElementById('arena')?.classList.add('hidden');
+    document.getElementById('arenaZoomBar')?.classList.add('hidden');
+    document.getElementById('objCtorCanvas')?.classList.add('hidden');
+    document.getElementById('objCtorZoomBar')?.classList.add('hidden');
+    document.getElementById('robotCtorCanvas')?.classList.add('hidden');
+    document.getElementById('robotCtorZoomBar')?.classList.add('hidden');
+    if (ctorCanvas) ctorCanvas.classList.remove('hidden');
+    document.getElementById('ctorZoomBar')?.classList.remove('hidden');
+    // sync UI
+    setGridLock(ctor.gridLock || 10);
+    const brushEl = document.getElementById('brushSize');
+    if (brushEl) brushEl.value = ctor.brush;
+    const brushLbl = document.getElementById('brushSizeLabel');
+    if (brushLbl) brushLbl.textContent = ctor.brush + ' mm';
+    const brushNum = document.getElementById('brushSizeNum');
+    if (brushNum) brushNum.value = ctor.brush;
+    const sw = document.getElementById('activeColorSwatch');
+    if (sw) sw.style.background = ctor.color;
+    fitCtorCanvas();
+    drawCtor();
+  } catch (err) {
+    console.error('openConstructorTab:', err);
+    logUI({ t: 0, msg: 'Erro ao abrir construtor: ' + err.message, category: 'error' });
+  }
 }
 
 function closeConstructorTab() {
-  ctorCanvas.classList.add('hidden');
-  document.getElementById('ctorZoomBar').classList.add('hidden');
-  document.getElementById('arena').classList.remove('hidden');
-  document.getElementById('arenaZoomBar').classList.remove('hidden');
+  if (ctorCanvas) ctorCanvas.classList.add('hidden');
+  document.getElementById('ctorZoomBar')?.classList.add('hidden');
 }
 
 function fitCtorCanvas() {
@@ -2186,7 +2285,11 @@ function bufferToCustomDef(name, points) {
 
 // ─── Bindings ────────────────────────────────────────────────
 document.querySelectorAll('.mode-tabs button').forEach(btn => {
-  btn.onclick = () => setMode(btn.dataset.mode);
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const mode = btn.dataset.mode;
+    if (mode) setMode(mode);
+  });
 });
 
 document.getElementById('btnPlay').onclick = () => {
@@ -2220,30 +2323,154 @@ document.getElementById('btnZoomReset').onclick = () => {
 };
 
 function setEditorLayer(layer) {
-  // layer: 'tiles' | 'objects'
+  // layer: 'tiles' | 'official' | 'objects'
   const tilesSec = document.getElementById('editorTilesSection');
+  const offSec = document.getElementById('editorOfficialSection');
   const objsSec = document.getElementById('editorObjectsSection');
   const btnT = document.getElementById('btnShowTiles');
+  const btnOff = document.getElementById('btnShowOfficial');
   const btnO = document.getElementById('btnShowObjects');
+  [tilesSec, offSec, objsSec].forEach(el => el && el.classList.add('hidden'));
+  [btnT, btnOff, btnO].forEach(b => {
+    if (!b) return;
+    b.classList.remove('active-tool', 'primary');
+  });
   if (layer === 'objects') {
-    if (tilesSec) tilesSec.classList.add('hidden');
     if (objsSec) objsSec.classList.remove('hidden');
-    if (btnT) btnT.classList.remove('active-tool', 'primary');
     if (btnO) { btnO.classList.add('active-tool', 'primary'); }
     sim.selectedTool = null;
     sim.markerTool = null;
+    sim.placingOfficialFile = null;
+  } else if (layer === 'official') {
+    if (offSec) offSec.classList.remove('hidden');
+    if (btnOff) { btnOff.classList.add('active-tool', 'primary'); }
+    sim.objectTool = null;
+    sim.markerTool = null;
+    ensureOfficialPalette();
   } else {
     if (tilesSec) tilesSec.classList.remove('hidden');
-    if (objsSec) objsSec.classList.add('hidden');
-    if (btnO) btnO.classList.remove('active-tool', 'primary');
     if (btnT) { btnT.classList.add('active-tool', 'primary'); }
     sim.objectTool = null;
+    sim.placingOfficialFile = null;
   }
+  updateMirrorUI();
 }
 const btnShowTiles = document.getElementById('btnShowTiles');
 if (btnShowTiles) btnShowTiles.onclick = () => setEditorLayer('tiles');
+const btnShowOfficial = document.getElementById('btnShowOfficial');
+if (btnShowOfficial) btnShowOfficial.onclick = () => setEditorLayer('official');
 const btnShowObjects = document.getElementById('btnShowObjects');
 if (btnShowObjects) btnShowObjects.onclick = () => setEditorLayer('objects');
+
+// ─── Catálogo de ladrilhos oficiais ─────────────────────────
+sim.placingOfficialFile = null;
+sim.officialTileFiles = []; // [{ file, url, type }]
+
+function classifyOfficialFilename(file) {
+  const f = String(file).toLowerCase();
+  if (f === 'seesaw.png') return 'gangorra';
+  if (f === 'exit.png') return 'rescue_exit';
+  if (f.startsWith('ev')) return 'rescue';
+  // tile-N.png — tipo genérico; a imagem oficial é a fonte visual
+  return 'straight';
+}
+
+function probeOfficialImage(file) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = `assets/official-tiles/${file}`;
+    img.onload = () => resolve({ file, url, ok: true, type: classifyOfficialFilename(file) });
+    img.onerror = () => resolve({ file, url, ok: false });
+    img.src = url;
+  });
+}
+
+async function loadOfficialTileCatalog() {
+  const candidates = [];
+  for (let i = 0; i <= 83; i++) candidates.push(`tile-${i}.png`);
+  candidates.push('seesaw.png', 'exit.png', 'ev1.png', 'ev2.png', 'ev3.png');
+  const results = await Promise.all(candidates.map(probeOfficialImage));
+  sim.officialTileFiles = results.filter(r => r.ok);
+  return sim.officialTileFiles;
+}
+
+function selectOfficialTile(file) {
+  sim.selectedTool = 'official';
+  sim.placingOfficialFile = file;
+  sim.objectTool = null;
+  sim.markerTool = null;
+  document.querySelectorAll('#tileTools button, #officialTileTools button').forEach(b => b.classList.remove('active-tool'));
+  document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
+  const btn = [...document.querySelectorAll('#officialTileTools button')].find(b => b.dataset.official === file);
+  if (btn) btn.classList.add('active-tool');
+  logUI({ t: 0, msg: `Ladrilho oficial selecionado: ${file}`, category: 'info' });
+}
+
+function renderOfficialPalette() {
+  const wrap = document.getElementById('officialTileTools');
+  const status = document.getElementById('officialTileStatus');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!sim.officialTileFiles.length) {
+    if (status) status.textContent = 'Nenhuma imagem em assets/official-tiles/. Coloque os PNGs oficiais nessa pasta.';
+    return;
+  }
+  if (status) status.textContent = `${sim.officialTileFiles.length} ladrilhos oficiais disponíveis.`;
+  sim.officialTileFiles.forEach(({ file, url, type }) => {
+    const btn = document.createElement('button');
+    btn.className = 'tile-btn';
+    btn.dataset.official = file;
+    btn.title = `${file} → ${type}`;
+    if (sim.placingOfficialFile === file && sim.selectedTool === 'official') btn.classList.add('active-tool');
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = file;
+    img.style.cssText = 'width:40px;height:40px;object-fit:contain;image-rendering:pixelated;display:block';
+    sw.appendChild(img);
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = file.replace(/\.png$/i, '');
+    btn.appendChild(sw);
+    btn.appendChild(lbl);
+    btn.onclick = () => selectOfficialTile(file);
+    wrap.appendChild(btn);
+  });
+}
+
+let _officialPaletteLoaded = false;
+async function ensureOfficialPalette() {
+  if (!_officialPaletteLoaded) {
+    const status = document.getElementById('officialTileStatus');
+    if (status) status.textContent = 'Carregando catálogo…';
+    await loadOfficialTileCatalog();
+    _officialPaletteLoaded = true;
+  }
+  renderOfficialPalette();
+}
+
+function updateMirrorUI() {
+  const h = document.getElementById('btnMirrorH');
+  const v = document.getElementById('btnMirrorV');
+  const hint = document.getElementById('mirrorHint');
+  const allow = !!sim.customMode;
+  if (h) {
+    h.disabled = !allow;
+    h.style.opacity = allow ? '1' : '0.45';
+    h.title = allow ? 'Espelhar horizontal' : 'Disponível apenas no Modo Custom';
+  }
+  if (v) {
+    v.disabled = !allow;
+    v.style.opacity = allow ? '1' : '0.45';
+    v.title = allow ? 'Espelhar vertical' : 'Disponível apenas no Modo Custom';
+  }
+  if (hint) {
+    hint.textContent = allow
+      ? 'Espelhamento: ativo (Modo Custom).'
+      : 'Espelhamento: desativado (ative Modo Custom para usar — evita incompatibilidade com o oficial).';
+  }
+}
 
 document.querySelectorAll('#objectTools button').forEach(btn => {
   btn.onclick = () => {
@@ -2349,6 +2576,16 @@ function rotateSelected() {
   draw();
 }
 function mirrorSelected(axis) {
+  // Espelhamento só no Modo Custom (evita incompatibilidade com o app oficial)
+  if (!sim.customMode) {
+    logUI({
+      t: 0,
+      msg: 'Espelhamento bloqueado. Ative o Modo Custom em Backup & dados para usar.',
+      category: 'warning'
+    });
+    updateMirrorUI();
+    return;
+  }
   if (sim.selectedObject) {
     pushArenaUndo();
     if (axis === 'h') sim.selectedObject.mirrorH = !sim.selectedObject.mirrorH;
@@ -2356,6 +2593,7 @@ function mirrorSelected(axis) {
     draw(); return;
   }
   if (!sim.selectedTile) return;
+  // Ladrilhos oficiais: mesmo no modo custom, avisar se ainda quiser espelhar
   pushArenaUndo();
   if (axis === 'h') sim.selectedTile.mirrorH = !sim.selectedTile.mirrorH;
   else sim.selectedTile.mirrorV = !sim.selectedTile.mirrorV;
@@ -2380,21 +2618,52 @@ document.getElementById('btnSaveArena').onclick = () => {
   sim.customArenaObjects = JSON.parse(JSON.stringify(sim.objects));
   logUI({ t: 0, msg: `Arena salva (${sim.customArena.length} ladrilhos, ${sim.objects.length} objetos).`, category: 'success' });
   try {
-    localStorage.setItem('obr_custom_arena', JSON.stringify(sim.customArena));
-    localStorage.setItem('obr_custom_arena_objects', JSON.stringify(sim.customArenaObjects));
+    persist('obr_custom_arena', sim.customArena);
+    persist('obr_custom_arena_objects', sim.customArenaObjects);
   } catch (e) {}
 };
+function downloadJSONFile(filename, data) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 document.getElementById('btnExportJSON').onclick = () => {
   const data = {
     gridW: sim.gridW, gridH: sim.gridH,
     tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
     objects: sim.objects
   };
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-  a.download = 'obr-arena.json';
-  a.click();
+  downloadJSONFile('obr-arena.json', data);
+  logUI({ t: 0, msg: 'Exportado no formato do trainer (obr-arena.json).', category: 'success' });
 };
+
+document.getElementById('btnExportOfficial')?.addEventListener('click', () => {
+  try {
+    const official = convertToOfficialArena({
+      gridW: sim.gridW,
+      gridH: sim.gridH,
+      tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
+      objects: sim.objects,
+      meta: sim.officialMeta || {}
+    });
+    const name = (official.name || 'arena').replace(/[^\w\-]+/g, '_');
+    downloadJSONFile(`${name}-oficial.json`, official);
+    const n = Object.keys(official.tiles || {}).length;
+    logUI({
+      t: 0,
+      msg: `Exportado formato oficial (${n} ladrilhos) → ${name}-oficial.json`,
+      category: 'success'
+    });
+  } catch (err) {
+    alert('Falha ao exportar formato oficial: ' + err.message);
+  }
+});
+
 document.getElementById('btnImportJSON').onclick = () => document.getElementById('importFile').click();
 document.getElementById('btnMeasure').onclick = () => {
   sim.measureMode = !sim.measureMode;
@@ -2413,8 +2682,28 @@ document.getElementById('importFile').onchange = async e => {
   const file = e.target.files[0];
   if (!file) return;
   try {
-    const data = JSON.parse(await file.text());
-    // Limpa a arena antes de importar (evita mesclar com conteúdo antigo)
+    let data = JSON.parse(await file.text());
+
+    // Formato oficial (tileSet + tiles objeto)
+    if (isOfficialArenaFormat(data)) {
+      if (sim.customMode) {
+        alert('Modo custom está ativo. Desative-o para importar arenas do formato oficial.');
+        e.target.value = '';
+        return;
+      }
+      data = convertOfficialArena(data);
+      sim.officialMeta = data.meta || null;
+      logUI({
+        t: 0,
+        msg: `Arena oficial convertida${data.meta?.name ? ': ' + data.meta.name : ''} (${data.tiles.length} ladrilhos).`,
+        category: 'info'
+      });
+    } else if (data.gridW || Array.isArray(data.tiles)) {
+      // import interno: não sobrescreve meta oficial se já existir, a menos que venha embutida
+      if (data.meta) sim.officialMeta = data.meta;
+    }
+
+    // Limpa a arena antes de importar
     pushArenaUndo();
     sim.tiles.forEach(t => { t.type = TileType.EMPTY; t.custom = null; t._img = null; t._imgSrc = null; });
     sim.objects = [];
@@ -2437,6 +2726,8 @@ document.getElementById('importFile').onchange = async e => {
     sim.objects = data.objects || [];
     sim.customArena = sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON());
     sim.customArenaObjects = JSON.parse(JSON.stringify(sim.objects));
+    persist('obr_custom_arena', sim.customArena);
+    persist('obr_custom_arena_objects', sim.customArenaObjects);
     logUI({ t: 0, msg: 'Arena limpa e importada.', category: 'success' });
     fitCamera();
     draw();
@@ -2643,14 +2934,16 @@ document.getElementById('btnCtorSave').onclick = () => {
     sim.customLibrary.push(def);
     logUI({ t: 0, msg: `Ladrilho "${name}" salvo (300×300 mm pixel + contexto 3×3).`, category: 'success' });
   }
-  try { localStorage.setItem('obr_custom_tiles', JSON.stringify(sim.customLibrary)); } catch (e) {}
+  persist('obr_custom_tiles', sim.customLibrary);
   refreshCustomSelect();
 };
 
 window.addEventListener('keydown', e => {
-  if (e.code === 'Space') { sim.spaceDown = true; e.preventDefault(); }
-  // 1..6 — switch tabs
-  if (e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+  const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
+  if (e.code === 'Space' && !typing) { sim.spaceDown = true; e.preventDefault(); }
+  // 1..6 — switch tabs (não intercepta quando está digitando)
+  if (!typing && e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const modes = ['editor', 'sim', 'manual', 'constructor', 'objconstructor', 'robot'];
     const idx = parseInt(e.key) - 1;
     setMode(modes[idx]);
@@ -2741,25 +3034,29 @@ function initObjBuf() {
 }
 
 function openObjConstructorTab() {
-  if (!objCtorCanvas) return;
-  if (!objCtor.buf) initObjBuf();
-  document.getElementById('arena').classList.add('hidden');
-  document.getElementById('arenaZoomBar').classList.add('hidden');
-  document.getElementById('ctorCanvas').classList.add('hidden');
-  document.getElementById('ctorZoomBar').classList.add('hidden');
-  objCtorCanvas.classList.remove('hidden');
-  document.getElementById('objCtorZoomBar').classList.remove('hidden');
-  const gl = document.getElementById('objGridLock');
-  if (gl) objCtor.gridLock = parseInt(gl.value) || 1;
-  fitObjCtorCanvas();
-  drawObjCtor();
+  try {
+    if (!objCtorCanvas) return;
+    if (!objCtor.buf) initObjBuf();
+    document.getElementById('arena')?.classList.add('hidden');
+    document.getElementById('arenaZoomBar')?.classList.add('hidden');
+    document.getElementById('ctorCanvas')?.classList.add('hidden');
+    document.getElementById('ctorZoomBar')?.classList.add('hidden');
+    document.getElementById('robotCtorCanvas')?.classList.add('hidden');
+    document.getElementById('robotCtorZoomBar')?.classList.add('hidden');
+    objCtorCanvas.classList.remove('hidden');
+    document.getElementById('objCtorZoomBar')?.classList.remove('hidden');
+    const gl = document.getElementById('objGridLock');
+    if (gl) objCtor.gridLock = parseInt(gl.value) || 1;
+    fitObjCtorCanvas();
+    drawObjCtor();
+  } catch (err) {
+    console.error('openObjConstructorTab:', err);
+  }
 }
 
 function closeObjConstructorTab() {
-  if (!objCtorCanvas) return;
-  objCtorCanvas.classList.add('hidden');
-  const zb = document.getElementById('objCtorZoomBar');
-  if (zb) zb.classList.add('hidden');
+  if (objCtorCanvas) objCtorCanvas.classList.add('hidden');
+  document.getElementById('objCtorZoomBar')?.classList.add('hidden');
 }
 
 function fitObjCtorCanvas() {
@@ -3085,7 +3382,7 @@ function refreshObjLibrary() {
         const i = parseInt(btn.dataset.odel);
         if (confirm(`Excluir "${sim.customObjLibrary[i].name}"?`)) {
           sim.customObjLibrary.splice(i, 1);
-          try { localStorage.setItem('obr_custom_objects', JSON.stringify(sim.customObjLibrary)); } catch (e) {}
+          persist('obr_custom_objects', sim.customObjLibrary);
           refreshObjLibrary();
         }
       };
@@ -3227,7 +3524,7 @@ document.getElementById('btnObjCtorSave').onclick = () => {
   tctx.putImageData(img, 0, 0);
   const def = { name, points, pixel: true, sizeMm: OBJ_MM, bitmap: tmp.toDataURL('image/png') };
   sim.customObjLibrary.push(def);
-  try { localStorage.setItem('obr_custom_objects', JSON.stringify(sim.customObjLibrary)); } catch (e) {}
+  persist('obr_custom_objects', sim.customObjLibrary);
   refreshObjLibrary();
   logUI({ t: 0, msg: `Objeto "${name}" salvo (${points} pts).`, category: 'success' });
 };
@@ -3241,7 +3538,7 @@ window.addEventListener('keydown', e => {
   }
 });
 
-// load objects library + arena objects
+// load objects library + arena objects (síncrono localStorage; reforçado no bootstrap async)
 try {
   const o = localStorage.getItem('obr_custom_objects');
   if (o) sim.customObjLibrary = JSON.parse(o);
@@ -3311,12 +3608,8 @@ function openRobotConstructorTab() {
 }
 
 function closeRobotConstructorTab() {
-  const c = document.getElementById('robotCtorCanvas');
-  const zb = document.getElementById('robotCtorZoomBar');
-  if (c) c.classList.add('hidden');
-  if (zb) zb.classList.add('hidden');
-  document.getElementById('arena')?.classList.remove('hidden');
-  document.getElementById('arenaZoomBar')?.classList.remove('hidden');
+  document.getElementById('robotCtorCanvas')?.classList.add('hidden');
+  document.getElementById('robotCtorZoomBar')?.classList.add('hidden');
 }
 
 function fitRobotCtorCanvas() {
@@ -3631,7 +3924,7 @@ function refreshRobotLibrary() {
       const i = parseInt(btn.dataset.rdel);
       if (!confirm('Excluir robô?')) return;
       sim.robotLibrary.splice(i, 1);
-      try { localStorage.setItem('obr_robot_library', JSON.stringify(sim.robotLibrary)); } catch (e) {}
+      persist('obr_robot_library', sim.robotLibrary);
       refreshRobotLibrary();
     };
   });
@@ -3643,7 +3936,7 @@ document.getElementById('btnRobotSave')?.addEventListener('click', () => {
     sim.robotLibrary[robotCtor.editingIndex] = def;
     robotCtor.editingIndex = null;
   } else sim.robotLibrary.push(def);
-  try { localStorage.setItem('obr_robot_library', JSON.stringify(sim.robotLibrary)); } catch (e) {}
+  persist('obr_robot_library', sim.robotLibrary);
   refreshRobotLibrary();
   logUI({ t: 0, msg: `Robô "${def.name}" salvo na biblioteca.`, category: 'success' });
 });
@@ -3854,19 +4147,141 @@ placeRobotAtStart = function() {
   }
 };
 
-// init
-try { const a = localStorage.getItem('obr_custom_arena'); if (a) sim.customArena = JSON.parse(a); } catch (e) {}
-try { const t = localStorage.getItem('obr_custom_tiles'); if (t) sim.customLibrary = JSON.parse(t); } catch (e) {}
-try { const rl = localStorage.getItem('obr_robot_library'); if (rl) sim.robotLibrary = JSON.parse(rl); } catch (e) {}
-refreshCustomSelect();
-refreshRobotLibrary();
-sim.activeRobotDef = defaultRobotDef();
-resizeCanvas();
-loadScenario('basic');
-if (sim.robot) {
-  sim.robot.definition = sim.activeRobotDef;
-  sim.robot.width = sim.activeRobotDef.body.w * MM_TO_WORLD;
-  sim.robot.height = sim.activeRobotDef.body.h * MM_TO_WORLD;
+// ─── Backup UI + modo custom ─────────────────────────────────
+function showBackupStatus(msg, ok = true) {
+  const el = document.getElementById('backupStatus');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.borderLeft = `3px solid ${ok ? 'var(--ok, #22c55e)' : 'var(--danger, #ef4444)'}`;
+  setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 5000);
 }
-setMode('sim');
-loop();
+
+function applyLoadedLibrariesToUI() {
+  refreshCustomSelect();
+  refreshObjLibrary();
+  refreshRobotLibrary();
+  const tog = document.getElementById('toggleCustomMode');
+  if (tog) tog.checked = !!sim.customMode;
+}
+
+async function reloadLibrariesFromStorage() {
+  sim.customLibrary = await dataManager.loadKey('obr_custom_tiles', sim.customLibrary || []);
+  sim.customObjLibrary = await dataManager.loadKey('obr_custom_objects', sim.customObjLibrary || []);
+  sim.customArena = await dataManager.loadKey('obr_custom_arena', sim.customArena);
+  sim.customArenaObjects = await dataManager.loadKey('obr_custom_arena_objects', sim.customArenaObjects || []);
+  sim.robotLibrary = await dataManager.loadKey('obr_robot_library', sim.robotLibrary || []);
+  sim.customMode = !!(await dataManager.loadKey('obr_custom_mode', false));
+  applyLoadedLibrariesToUI();
+}
+
+document.getElementById('btnExportBackup')?.addEventListener('click', async () => {
+  try {
+    // sincroniza estado atual antes de exportar
+    persist('obr_custom_tiles', sim.customLibrary);
+    persist('obr_custom_objects', sim.customObjLibrary);
+    persist('obr_custom_arena', sim.customArena);
+    persist('obr_custom_arena_objects', sim.customArenaObjects);
+    persist('obr_robot_library', sim.robotLibrary);
+    persist('obr_custom_mode', sim.customMode);
+    await dataManager.init();
+    const name = `obr-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    await dataManager.downloadJSON(name);
+    showBackupStatus('✅ Backup baixado: ' + name, true);
+    logUI({ t: 0, msg: 'Backup completo exportado.', category: 'success' });
+  } catch (err) {
+    showBackupStatus('❌ Erro ao exportar: ' + err.message, false);
+  }
+});
+
+document.getElementById('btnImportBackup')?.addEventListener('click', async () => {
+  try {
+    await dataManager.init();
+    const result = await dataManager.uploadJSON();
+    await reloadLibrariesFromStorage();
+    showBackupStatus(`✅ Importados ${result.imported} conjuntos de dados.`, true);
+    logUI({ t: 0, msg: `Backup importado (${result.imported} chaves).`, category: 'success' });
+  } catch (err) {
+    showBackupStatus('❌ Erro ao importar: ' + (err.message || err), false);
+  }
+});
+
+document.getElementById('btnClearAllData')?.addEventListener('click', async () => {
+  if (!confirm('Tem certeza? Isso apaga bibliotecas, arena salva, robôs e modo custom (irreversível).')) return;
+  try {
+    await dataManager.init();
+    await dataManager.clearAll();
+    sim.customLibrary = [];
+    sim.customObjLibrary = [];
+    sim.customArena = null;
+    sim.customArenaObjects = [];
+    sim.robotLibrary = [];
+    sim.customMode = false;
+    applyLoadedLibrariesToUI();
+    showBackupStatus('✅ Todos os dados foram limpos.', true);
+    logUI({ t: 0, msg: 'Dados locais limpos.', category: 'warning' });
+  } catch (err) {
+    showBackupStatus('❌ Erro ao limpar: ' + err.message, false);
+  }
+});
+
+function applyCustomMode(enabled) {
+  sim.customMode = !!enabled;
+  persist('obr_custom_mode', sim.customMode);
+  const tog = document.getElementById('toggleCustomMode');
+  if (tog) tog.checked = sim.customMode;
+  // Ao sair do modo custom, zera espelhamentos (compatibilidade oficial)
+  if (!sim.customMode) {
+    (sim.tiles || []).forEach(t => { t.mirrorH = false; t.mirrorV = false; });
+    (sim.objects || []).forEach(o => { o.mirrorH = false; o.mirrorV = false; });
+  }
+  updateMirrorUI();
+  logUI({
+    t: 0,
+    msg: sim.customMode
+      ? 'Modo custom ativado — espelhamento liberado; import oficial desligado.'
+      : 'Modo custom desativado — espelhamento bloqueado; compatibilidade oficial ativa.',
+    category: sim.customMode ? 'warning' : 'success'
+  });
+  draw();
+}
+
+const toggleCustomEl = document.getElementById('toggleCustomMode');
+if (toggleCustomEl) {
+  toggleCustomEl.addEventListener('change', (e) => applyCustomMode(e.target.checked));
+  toggleCustomEl.addEventListener('click', (e) => {
+    // garante resposta imediata em alguns browsers
+    setTimeout(() => applyCustomMode(toggleCustomEl.checked), 0);
+  });
+}
+
+// init (async: IndexedDB + migração)
+(async function bootstrap() {
+  try {
+    await dataManager.init();
+    sim.customLibrary = await dataManager.loadKey('obr_custom_tiles', []);
+    sim.customObjLibrary = await dataManager.loadKey('obr_custom_objects', []);
+    sim.customArena = await dataManager.loadKey('obr_custom_arena', null);
+    sim.customArenaObjects = await dataManager.loadKey('obr_custom_arena_objects', []);
+    sim.robotLibrary = await dataManager.loadKey('obr_robot_library', []);
+    sim.customMode = !!(await dataManager.loadKey('obr_custom_mode', false));
+  } catch (e) {
+    console.warn('Bootstrap storage:', e);
+    try { const a = localStorage.getItem('obr_custom_arena'); if (a) sim.customArena = JSON.parse(a); } catch (e2) {}
+    try { const t = localStorage.getItem('obr_custom_tiles'); if (t) sim.customLibrary = JSON.parse(t); } catch (e2) {}
+    try { const rl = localStorage.getItem('obr_robot_library'); if (rl) sim.robotLibrary = JSON.parse(rl); } catch (e2) {}
+  }
+  applyLoadedLibrariesToUI();
+  updateMirrorUI();
+  // pré-carrega catálogo oficial em background
+  ensureOfficialPalette().catch(() => {});
+  sim.activeRobotDef = defaultRobotDef();
+  resizeCanvas();
+  loadScenario('basic');
+  if (sim.robot) {
+    sim.robot.definition = sim.activeRobotDef;
+    sim.robot.width = sim.activeRobotDef.body.w * MM_TO_WORLD;
+    sim.robot.height = sim.activeRobotDef.body.h * MM_TO_WORLD;
+  }
+  setMode('sim');
+  loop();
+})();

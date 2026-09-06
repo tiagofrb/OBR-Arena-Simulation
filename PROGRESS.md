@@ -1,30 +1,25 @@
 # Progresso — OBR Judge Trainer
 
-## Concluído anteriormente
-- Pincel unificado (cores OBR + RGB, linha 2 cliques, zona sucesso UI)
-- Fundo branco construtores; objeto transparente na arena
-- Editar ladrilho da biblioteca
-- Import limpa arena; reset manual do robô
-- Toggle ladrilhos/objetos no editor; paleta de objetos
+## Implementado (reestruturação)
 
-## Nova funcionalidade — Construtor de robô + script
+### Parte 1 — IndexedDB (DataManager)
+- `js/storage/DataManager.js` — store chave-valor `kv`
+- Chaves: obr_custom_tiles, obr_custom_arena, obr_custom_arena_objects, obr_custom_objects, obr_robot_library, obr_custom_mode
+- Migração automática localStorage → IndexedDB
+- Espelho localStorage em todo `persist()`
+- Export / import backup completo + limpar dados
 
-### Aba 6 — Construtor de robô
-- Corpo (largura × comprimento mm)
-- Detector **under** (solo): retângulo no chassi
-- Detector **forward**: retângulo ou triângulo projetado à frente
-- Arrastar no canvas; editar parâmetros; biblioteca salvar/carregar/usar
+### Parte 2 — Formato oficial
+- `js/io/officialTileClassifier.js` — classifica por paths/gaps/seesaw/image
+- `js/io/officialArenaAdapter.js` — detecção + conversão + cache de imagens
+- Import da arena intercepta formato oficial (tileSet)
+- Skin oficial em `assets/official-tiles/` com fallback para desenho nativo
 
-### Sensores
-- Amostragem under/forward → `{ r, g, b, lum }`
-- Painel de leituras na aba Simulação
+### Parte 3 — Modo Custom
+- `sim.customMode` persistido
+- Toggle no painel Backup & dados
+- Com modo ativo, import oficial é recusado
+- Render não usa imagens oficiais
 
-### Script
-- Modo Path (original) vs Script
-- `setVelocity(v, omega)` / `stop()` — só move o sprite
-- Exemplo seguidor de linha
-- Path e manual preservados
-
-### Modelo
-- `Robot.definition`, `vLinear`, `vAngular`, `sensorReadings`
-- Definição padrão com line_left, line_right, front
+### UI
+- Painel Backup & dados (export / import / limpar + toggle)
