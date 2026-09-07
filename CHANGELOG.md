@@ -8,6 +8,11 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- Fase 0–1 da modularização (`docs/modularization-plan.md`):
+  - `js/core/persist.js`, `js/core/typing.js`
+  - `js/app/AppShell.js`, `js/app/Keyboard.js`, `js/app/GameLoop.js`
+  - `js/ui/ScorePanel.js`
+  - Constantes de movimento: `MANUAL_LINEAR_SPEED`, `MANUAL_ANGULAR_SPEED`, `PATH_FOLLOW_SPEED`, `PATH_WAYPOINT_EPSILON`
 - `docs/modularization-plan.md` — plano para extrair o restante de `main.js` (shell, editor UI, simulação, construtores)
 - Módulos do editor de arena:
   - `js/editor/ArenaHistory.js` — undo/redo
@@ -24,12 +29,16 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
 - `AGENTS.md`, `docs/architecture.md`
 
 ### Changed
+- `main.js` delega shell (abas/teclado/loop), placar, persist e typing aos módulos `app/` / `ui/` / `core/`
+- `docs/architecture.md` atualizado com camadas shell e core
 - `docs/architecture.md` aponta o plano de modularização; lista MapMeta / TileProps / EditorDragDrop como já extraídos
 - `main.js` delega histórico, grade, câmera, operações de tile, ferramentas e render aos módulos
 - `Models.js` reexporta `TILE_PX` / `LINE_W` a partir de `constants.js`
 - `isTypingTarget` endurecido (corrige issue #1 — teclas 1–6 em inputs)
 
 ### Removed
+- Código morto `_origPushArena` e init vazio no rodapé de `main.js`
+- Duplicata local de `MM_PER_TILE` / `MM_TO_WORLD` em `main.js`
 - Handler de keydown redundante para Ctrl+Z/Y no construtor de objetos
 - Bloco monolítico de desenho da arena em `main.js` (movido para `ArenaRenderer`)
 - Sprite do robô restaurado (corpo, rodas, frente, detectores) conforme implementação original

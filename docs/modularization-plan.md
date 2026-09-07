@@ -97,28 +97,28 @@ Nomes podem ajustar na implementação, desde que a **fronteira de responsabilid
 
 Cada fase termina com: código morto removido, `docs/architecture.md` / este plano atualizados se a árvore mudou, `CHANGELOG.md` se o comportamento visível ou a estrutura relevante para quem usa o repo mudou.
 
-### Fase 0 — Higiene (curta)
+### Fase 0 — Higiene ✅
 
-- Apagar wrappers que só reexportam 1:1 quando o `main` puder importar o módulo direto (câmera, histórico, MapMeta, TileProps).
-- Remover `_origPushArena` e `try` de init vazio no rodapé.
-- Subir constantes mágicas do `update` (ex.: velocidade 110, rotação 2.8, `90 * speed` no path, `TILE_PX / 300` duplicado — já existe `MM_TO_WORLD`).
+- Removido `_origPushArena` e bloco vazio no rodapé do `try` de init.
+- Constantes de movimento em `js/core/constants.js`: `MANUAL_LINEAR_SPEED`, `MANUAL_ANGULAR_SPEED`, `PATH_FOLLOW_SPEED`, `PATH_WAYPOINT_EPSILON`.
+- `update()` e sizing do robô usam `MM_TO_WORLD` importado (sem `TILE_PX / 300` / `MM_PER_TILE` locais).
 
 Não muda comportamento. Reduz ruído para as fases seguintes.
 
-### Fase 1 — Shell da aplicação
+### Fase 1 — Shell da aplicação ✅
 
-**Origem em `main.js`:** drawer de ajuda (~123–134), `setMode` (~1013–1094), `isTypingTarget` + `keydown` (~2601–2684 e o segundo listener ~4105), `loop`, `persist`.
+**Origem em `main.js`:** drawer de ajuda, `setMode`, `isTypingTarget` + `keydown`, `loop`, `persist`, placar/log.
 
 | Módulo | Conteúdo |
 |--------|----------|
-| `core/persist.js` | `persist(key, value)` usando `DataManager` |
+| `core/persist.js` | `persist` + `createPersist(dataManager)` |
 | `core/typing.js` | `isTypingTarget` |
-| `app/AppShell.js` | abas, painéis, `setMode`, labels da barra |
-| `app/Keyboard.js` | atalhos; despacha para editor/construtores via `deps` |
-| `app/GameLoop.js` | `requestAnimationFrame`, chama `update` + `draw` |
-| `ui/ScorePanel.js` | log e placar |
+| `app/AppShell.js` | drawer, `setMode` (deps injetadas) |
+| `app/Keyboard.js` | atalhos globais 1–6, undo, editor, WASD |
+| `app/GameLoop.js` | `startGameLoop` + `wireResize` |
+| `ui/ScorePanel.js` | `updateScoreUI`, `logUI`, `clearLog` |
 
-**Critério de pronto:** trocar de aba 1–6 e atalhos funcionam; `main.js` não registra esses listeners direto.
+**Critério de pronto:** trocar de aba 1–6 e atalhos funcionam; `main.js` não registra esses listeners direto — só chama `wireAppShell()` / `startGameLoop`.
 
 ### Fase 2 — Completar o editor (o que ainda ficou no `main`)
 

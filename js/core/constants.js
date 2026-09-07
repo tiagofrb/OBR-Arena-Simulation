@@ -60,3 +60,26 @@ export const EDITOR_LAYERS = {
   TILES: 'tiles',
   OBJECTS: 'objects'
 };
+
+/**
+ * Velocidade linear do controle manual (WASD / setas) em px de mundo / s
+ * (na escala de TILE_PX; ~110 ≈ velocidade confortável para juízes).
+ */
+export const MANUAL_LINEAR_SPEED = 110;
+
+/**
+ * Velocidade angular do controle manual em rad / s
+ * (~2.8 rad/s ≈ 160°/s).
+ */
+export const MANUAL_ANGULAR_SPEED = 2.8;
+
+/**
+ * Velocidade do path automático (seguimento de pontos) em px de mundo / s.
+ */
+export const PATH_FOLLOW_SPEED = 90;
+
+/**
+ * Distância (px de mundo) abaixo da qual o robô avança para o próximo
+ * ponto do path automático.
+ */
+export const PATH_WAYPOINT_EPSILON = 6;

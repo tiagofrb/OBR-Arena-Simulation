@@ -50,6 +50,17 @@ Próximos passos sugeridos (editor):
 - Sprite do robô restaurado em `ArenaRenderer` (corpo/rodas/frente/detectores)
 - `main.js` ~4.4k linhas
 
-### Próximo — resto da modularização (planejado, não iniciado)
+### Parte 6 — Modularização shell (Fases 0–1) ✅
 
-Roteiro em `docs/modularization-plan.md`: higiene de wrappers → shell → paletas/I/O do editor → simulação/manual → paint compartilhado → construtores.
+- Fase 0: constantes de movimento em `constants.js`; removidos `_origPushArena` e `MM_PER_TILE` local
+- Fase 1:
+  - `js/core/persist.js`, `js/core/typing.js`
+  - `js/app/AppShell.js` (`setMode`, help drawer)
+  - `js/app/Keyboard.js` (atalhos globais)
+  - `js/app/GameLoop.js`
+  - `js/ui/ScorePanel.js`
+- `main.js` chama `wireAppShell()` + `startGameLoop` no bootstrap
+
+### Próximo — resto da modularização
+
+Roteiro em `docs/modularization-plan.md`: Fase 2 (paletas/I/O do editor) → Fase 3 (simulação/manual) → paint compartilhado → construtores.

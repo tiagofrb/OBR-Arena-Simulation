@@ -28,7 +28,12 @@ import {
   CAMERA_MAX_FIT_SCALE,
   CAMERA_MIN_SCALE,
   STORAGE_KEYS,
-  APP_MODES
+  APP_MODES,
+  MM_TO_WORLD,
+  MANUAL_LINEAR_SPEED,
+  MANUAL_ANGULAR_SPEED,
+  PATH_FOLLOW_SPEED,
+  PATH_WAYPOINT_EPSILON
 } from './core/constants.js';
 import {
   snapshotArena as _snapshotArena,
@@ -101,16 +106,24 @@ import {
   getDragPayload,
   setDragPayload
 } from './editor/EditorDragDrop.js';
+import { createPersist } from './core/persist.js';
+import { isTypingTarget } from './core/typing.js';
+import {
+  initHelpDrawer,
+  setMode as _setMode
+} from './app/AppShell.js';
+import { wireKeyboard } from './app/Keyboard.js';
+import { startGameLoop, wireResize } from './app/GameLoop.js';
+import {
+  updateScoreUI as _updateScoreUI,
+  logUI as _logUI,
+  clearLog as _clearLog
+} from './ui/ScorePanel.js';
 
 const dataManager = new DataManager();
 
 /** Persiste chave (localStorage imediato + IndexedDB assíncrono) */
-function persist(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) { /* quota */ }
-  dataManager.saveKey(key, value).catch(() => {});
-}
+const persist = createPersist(dataManager);
 
 const canvas = document.getElementById('arena');
 const ctx = canvas.getContext('2d');
@@ -121,17 +134,7 @@ let tilePreviewCanvas = document.getElementById('tilePreviewCanvas');
 let tilePreviewCap = document.getElementById('tilePreviewCap');
 
 // ─── Guia rápido (drawer) ────────────────────────────────────
-(function initHelpDrawer() {
-  const btn = document.getElementById('btnHelp2');
-  const scrim = document.getElementById('scrim');
-  const drawer = document.getElementById('drawer');
-  const closeBtn = document.getElementById('btnCloseDrawer');
-  const open = () => { scrim.classList.add('open'); drawer.classList.add('open'); };
-  const close = () => { scrim.classList.remove('open'); drawer.classList.remove('open'); };
-  if (btn) btn.onclick = open;
-  if (closeBtn) closeBtn.onclick = close;
-  if (scrim) scrim.onclick = close;
-})();
+initHelpDrawer();
 
 // ─── Camera (solve clipping) ─────────────────────────────────
 const cam = {
@@ -419,8 +422,8 @@ function restartRobot() {
     sim.robot.vAngular = 0;
     if (sim.activeRobotDef) {
       sim.robot.definition = sim.activeRobotDef;
-      sim.robot.width = (sim.activeRobotDef.body.w || 120) * (TILE_PX / 300);
-      sim.robot.height = (sim.activeRobotDef.body.h || 150) * (TILE_PX / 300);
+      sim.robot.width = (sim.activeRobotDef.body.w || 120) * MM_TO_WORLD;
+      sim.robot.height = (sim.activeRobotDef.body.h || 150) * MM_TO_WORLD;
     }
   }
   sim.score.scoredHazards.clear();
@@ -514,7 +517,8 @@ function update(dt) {
   if (!sim.robot || sim.finished) return;
   const robot = sim.robot;
   if (sim.mode === 'manual') {
-    const speed = 110 * sim.speed, rot = 2.8 * sim.speed;
+    const speed = MANUAL_LINEAR_SPEED * sim.speed;
+    const rot = MANUAL_ANGULAR_SPEED * sim.speed;
     let dx = 0, dy = 0;
     if (sim.keys['ArrowUp'] || sim.keys['w'] || sim.keys['W']) { dx += Math.sin(robot.angle) * speed * dt; dy -= Math.cos(robot.angle) * speed * dt; }
     if (sim.keys['ArrowDown'] || sim.keys['s'] || sim.keys['S']) { dx -= Math.sin(robot.angle) * speed * dt; dy += Math.cos(robot.angle) * speed * dt; }
@@ -531,8 +535,7 @@ function update(dt) {
     if (sim.controlMode === 'script') {
       updateSensors(robot);
       runRobotScript(robot, dt);
-      const mmToWorld = TILE_PX / 300;
-      const v = (robot.vLinear || 0) * mmToWorld * sim.speed;
+      const v = (robot.vLinear || 0) * MM_TO_WORLD * sim.speed;
       const w = (robot.vAngular || 0) * sim.speed;
       robot.angle += w * dt;
       robot.pos.x += Math.sin(robot.angle) * v * dt;
@@ -555,10 +558,10 @@ function update(dt) {
       }
       const target = sim.path[robot.pathIndex + 1];
       const to = target.sub(robot.pos);
-      if (to.len() < 6) { robot.pathIndex++; checkTileEvents(robot); }
+      if (to.len() < PATH_WAYPOINT_EPSILON) { robot.pathIndex++; checkTileEvents(robot); }
       else {
         const dir = to.norm();
-        robot.pos = robot.pos.add(dir.mul(90 * sim.speed * dt));
+        robot.pos = robot.pos.add(dir.mul(PATH_FOLLOW_SPEED * sim.speed * dt));
         robot.angle = Math.atan2(dir.y, dir.x) + Math.PI / 2;
       }
     }
@@ -688,24 +691,18 @@ function roundRect(x, y, w, h, r) {
 }
 
 
-// ─── UI helpers ──────────────────────────────────────────────
+// ─── UI helpers (delegados a js/ui/ScorePanel.js) ────────────
 function updateScoreUI() {
-  document.getElementById('totalScore').textContent = sim.score.total;
-  document.getElementById('scoreTrajeto').textContent = sim.score.trajeto;
-  document.getElementById('scoreCP').textContent = sim.score.checkpoints;
-  document.getElementById('scoreFinish').textContent = sim.score.finish;
-  document.getElementById('scoreMult').textContent = '×' + sim.score.multiplier.toFixed(2);
-  document.getElementById('failCount').textContent = sim.score.fails;
+  _updateScoreUI(sim);
 }
 
 function logUI(ev) {
-  const log = document.getElementById('eventLog');
-  const div = document.createElement('div');
-  div.className = 'event ' + (ev.category || 'info');
-  div.innerHTML = `<span class="time">${(ev.t || 0).toFixed(1)}s</span> ${ev.msg}${ev.points ? ` <strong>+${ev.points}</strong>` : ''}`;
-  log.prepend(div);
+  _logUI(ev);
 }
-function clearLog() { document.getElementById('eventLog').innerHTML = ''; }
+
+function clearLog() {
+  _clearLog();
+}
 
 function loadCustomTileIntoCtor(idx) {
   const def = sim.customLibrary[idx];
@@ -1011,86 +1008,22 @@ function renderTilePalette() {
 }
 
 function setMode(mode) {
-  sim.mode = mode;
-  sim.running = false;
-
-  // Abas
-  document.getElementById('tabSim')?.classList.toggle('active', mode === 'sim');
-  document.getElementById('tabEditor')?.classList.toggle('active', mode === 'editor');
-  document.getElementById('tabManual')?.classList.toggle('active', mode === 'manual');
-  document.getElementById('tabConstructor')?.classList.toggle('active', mode === 'constructor');
-  document.getElementById('tabObjConstructor')?.classList.toggle('active', mode === 'objconstructor');
-  document.getElementById('tabRobot')?.classList.toggle('active', mode === 'robot');
-
-  // Painéis laterais
-  document.getElementById('panelSim')?.classList.toggle('hidden', mode !== 'sim');
-  document.getElementById('panelEditor')?.classList.toggle('hidden', mode !== 'editor');
-  document.getElementById('panelManual')?.classList.toggle('hidden', mode !== 'manual');
-  document.getElementById('panelConstructor')?.classList.toggle('hidden', mode !== 'constructor');
-  document.getElementById('panelObjConstructor')?.classList.toggle('hidden', mode !== 'objconstructor');
-  document.getElementById('panelRobot')?.classList.toggle('hidden', mode !== 'robot');
-
-  const modeLabels = {
-    sim: 'Simulação',
-    editor: 'Editor',
-    manual: 'Manual',
-    constructor: 'Construtor Tile',
-    objconstructor: 'Construtor Obj',
-    robot: 'Construtor Robô'
-  };
-  const simModeEl = document.getElementById('simMode');
-  if (simModeEl) simModeEl.textContent = modeLabels[mode] || mode;
-  const simStateEl = document.getElementById('simState');
-  if (simStateEl) simStateEl.textContent = 'Parado';
-
-  // Fecha todos os construtores (só esconde canvases extras)
-  closeConstructorTab();
-  closeObjConstructorTab();
-  closeRobotConstructorTab();
-
-  const isCtorMode = mode === 'constructor' || mode === 'objconstructor' || mode === 'robot';
-  if (!isCtorMode) {
-    // Volta a arena principal
-    document.getElementById('arena')?.classList.remove('hidden');
-    document.getElementById('arenaZoomBar')?.classList.remove('hidden');
-  }
-
-  try {
-    if (mode === 'constructor') {
-      openConstructorTab();
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Construtor de ladrilho 3×3. Shift+meio=pan · Scroll=zoom';
-    } else if (mode === 'objconstructor') {
-      openObjConstructorTab();
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Construtor de objeto 300×300. Só pincel/cores. Ctrl+Z/Y';
-    } else if (mode === 'robot') {
-      openRobotConstructorTab();
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Construtor de robô: corpo + detectores under/forward. +Y = frente.';
-    } else if (mode === 'editor') {
-      if (!sim.tiles.length) ensureGridMatrix();
-      // Oficial por padrão; App/Custom só quando modo custom
-      setEditorLayer(sim.customMode ? 'tiles' : 'official');
-      updateCustomObjectUI();
-      updateExportHint();
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Arraste da paleta · arraste tile para mover/remover · Shift+R anti-horário · Meio=picker · Clique direito=props';
-      fitCamera(); draw();
-      schedulePathfinding();
-    } else if (mode === 'manual') {
-      if (!sim.robot) placeRobotAtStart();
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'WASD/setas. Após chegada use Voltar ao Início.';
-      fitCamera(); draw();
-    } else {
-      const hb = document.getElementById('helpBox');
-      if (hb) hb.textContent = 'Play/Pause/Step. Zoom Fit para ver tudo.';
-      fitCamera(); draw();
-    }
-  } catch (err) {
-    console.error('setMode error:', mode, err);
-  }
+  _setMode(sim, mode, {
+    closeConstructorTab,
+    closeObjConstructorTab,
+    closeRobotConstructorTab,
+    openConstructorTab,
+    openObjConstructorTab,
+    openRobotConstructorTab,
+    ensureGridMatrix,
+    setEditorLayer,
+    updateCustomObjectUI,
+    updateExportHint,
+    fitCamera,
+    draw,
+    schedulePathfinding,
+    placeRobotAtStart
+  });
 }
 
 // ─── Editor mouse ────────────────────────────────────────────
@@ -2597,96 +2530,34 @@ document.getElementById('btnCtorSave').onclick = () => {
   refreshCustomSelect();
 };
 
-/** True quando o foco está em campo editável — atalhos globais não devem roubar a tecla. */
-function isTypingTarget(el) {
-  if (!el) return false;
-  const tag = (el.tagName || '').toLowerCase();
-  // Qualquer controle de formulário impede atalhos de aba/ferramenta
-  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button') return true;
-  if (el.isContentEditable) return true;
-  if (el.closest && el.closest('[contenteditable="true"]')) return true;
-  // Garante cobertura mesmo se o foco estiver em label associado
-  if (el.closest && el.closest('input, textarea, select, [contenteditable="true"]')) return true;
-  return false;
+// Teclado e resize (js/app/Keyboard.js + GameLoop.js) — wiring após defs de undo/rotate
+function wireAppShell() {
+  wireKeyboard(sim, {
+    setMode,
+    undoCtor: () => undoCtor(),
+    redoCtor: () => redoCtor(),
+    undoObjCtor: () => undoObjCtor(),
+    redoObjCtor: () => redoObjCtor(),
+    undoArena,
+    redoArena,
+    get ctor() { return ctor; },
+    drawCtor: () => drawCtor(),
+    get objCtor() { return objCtor; },
+    drawObjCtor: () => drawObjCtor(),
+    rotateSelected,
+    mirrorSelected,
+    clearTileAt,
+    fillTilePropsPanel: (t) => { if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(t); },
+    logUI,
+    cancelEditorTools: _cancelEditorTools,
+    draw,
+    TileType
+  });
+  wireResize(resizeCanvas);
 }
 
-window.addEventListener('keydown', e => {
-  const typing = isTypingTarget(e.target);
-  if (e.code === 'Space' && !typing) { sim.spaceDown = true; e.preventDefault(); }
-  if (e.key === 'Shift') sim.shiftDown = true;
-  // 1..6 — switch tabs (não intercepta quando está digitando; aceita teclado numérico)
-  const tabKey = (e.key >= '1' && e.key <= '6') ? e.key
-    : (e.code && /^Numpad[1-6]$/.test(e.code) ? e.code.slice(-1) : null);
-  if (!typing && tabKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    const modes = ['editor', 'sim', 'manual', 'constructor', 'objconstructor', 'robot'];
-    const idx = parseInt(tabKey, 10) - 1;
-    setMode(modes[idx]);
-    e.preventDefault();
-    return;
-  }
-  // Ctrl+Z / Ctrl+Y
-  if (e.ctrlKey || e.metaKey) {
-    if (e.key === 'z' || e.key === 'Z') {
-      e.preventDefault();
-      if (sim.mode === 'constructor') undoCtor();
-      else if (sim.mode === 'objconstructor') undoObjCtor();
-      else if (sim.mode === 'editor') undoArena();
-      return;
-    }
-    if (e.key === 'y' || e.key === 'Y') {
-      e.preventDefault();
-      if (sim.mode === 'constructor') redoCtor();
-      else if (sim.mode === 'objconstructor') redoObjCtor();
-      else if (sim.mode === 'editor') redoArena();
-      return;
-    }
-  }
-  if (e.key === 'Escape') {
-    if (sim.mode === 'constructor' && ctor.lineStart) { ctor.lineStart = null; drawCtor(); e.preventDefault(); return; }
-    if (sim.mode === 'objconstructor' && objCtor.lineStart) { objCtor.lineStart = null; drawObjCtor(); e.preventDefault(); return; }
-    if (sim.mode === 'editor' && sim.measureMode) {
-      sim.measureMode = false; sim.measureStart = null; sim.measureCursor = null;
-      document.getElementById('btnMeasure').classList.remove('active-tool');
-      document.getElementById('measureHint').textContent = 'Medir: 2 cliques na arena. Esc cancela.';
-      draw(); e.preventDefault(); return;
-    }
-  }
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D', 'q', 'e', 'Q', 'E'].includes(e.key)) {
-    sim.keys[e.key] = true;
-    if (sim.mode === 'manual') e.preventDefault();
-  }
-  if (sim.mode === 'editor') {
-    if (e.key === 'r' || e.key === 'R') { rotateSelected(e.shiftKey ? -1 : 1); e.preventDefault(); }
-    if (e.key === 't' || e.key === 'T') { mirrorSelected('h'); e.preventDefault(); }
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (sim.selectedTile && sim.selectedTile.type !== TileType.EMPTY) {
-        e.preventDefault();
-        const t = sim.selectedTile;
-        clearTileAt(t.gx, t.gy, t.gz || 0);
-        sim.selectedTile = null;
-        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
-        document.getElementById('selectedInfo').textContent = '—';
-        logUI({ t: 0, msg: 'Ladrilho apagado (Del)', category: 'info' });
-      }
-    }
-    if (e.key === 'Escape') {
-      _cancelEditorTools(sim);
-      e.preventDefault();
-    }
-  }
-});
-window.addEventListener('keyup', e => {
-  if (e.code === 'Space') sim.spaceDown = false;
-  if (e.key === 'Shift') sim.shiftDown = false;
-  sim.keys[e.key] = false;
-});
-
-window.addEventListener('resize', () => resizeCanvas());
-
 function loop() {
-  if (sim.mode === 'sim' && sim.running) { update(sim.dt * sim.speed); draw(); }
-  else if (sim.mode === 'manual') { update(sim.dt * sim.speed); draw(); }
-  requestAnimationFrame(loop);
+  startGameLoop(sim, { update, draw });
 }
 
 
@@ -3226,9 +3097,6 @@ refreshObjLibrary();
 // ═══════════════════════════════════════════════════════════════
 // Construtor de robô + sensores + script
 // ═══════════════════════════════════════════════════════════════
-const MM_PER_TILE = 300;
-const MM_TO_WORLD = TILE_PX / MM_PER_TILE;
-
 const robotCtor = {
   bodyW: 120,
   bodyH: 150,
@@ -3966,6 +3834,7 @@ if (toggleCustomEl) {
     sim.robot.width = sim.activeRobotDef.body.w * MM_TO_WORLD;
     sim.robot.height = sim.activeRobotDef.body.h * MM_TO_WORLD;
   }
+  wireAppShell();
   setMode('sim');
   loop();
 })();
@@ -4446,17 +4315,10 @@ function updateExportHint() {
     : 'Modo oficial: Exportar = JSON RCJ/OBR (com pathfinding). «Exportar (outro)» = formato do app. Arraste tiles · Shift+R = anti-horário.';
 }
 
-// Pathfinding após colocação por clique (já existente)
-const _origPushArena = typeof pushArenaUndo === 'function' ? null : null;
-
 try {
   wireArenaDragDrop();
   updateCustomObjectUI();
   updateExportHint();
-  // camada oficial por padrão no editor
-  if (typeof setEditorLayer === 'function') {
-    // só se ainda não escolheu
-  }
 } catch (err) {
   console.error('DnD init', err);
 }

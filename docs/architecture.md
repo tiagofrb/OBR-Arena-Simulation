@@ -10,14 +10,16 @@ Principais camadas:
 
 | Camada | Local | Responsabilidade |
 |--------|-------|------------------|
-| UI / orquestração | `js/main.js` | Eventos DOM, modo (aba), wiring, estado global `sim` (ainda monolítico; ver plano) |
+| UI / orquestração | `js/main.js` | Bootstrap, estado `sim`, wiring restante (paletas, construtores, sim) |
+| Shell | `js/app/*` | Abas/`setMode`, teclado, game loop |
+| UI placar | `js/ui/ScorePanel.js` | Log de eventos e placar |
+| Core | `js/core/*` | Constantes, persist, typing |
 | Modelos | `js/engine/Models.js` | `Tile`, `Robot`, `Vec`, `TileType` |
 | Pontuação | `js/engine/ScoreEngine.js` | Regras OBR de pontuação |
 | Persistência | `js/storage/DataManager.js` | IndexedDB + espelho localStorage |
 | I/O oficial | `js/io/*` | Classificação de tiles, conversão de arenas, pathfinding |
 | Editor | `js/editor/*` | Histórico, grade, operações de tile, ferramentas |
 | Render | `js/render/*` | Câmera 2D e pipeline de desenho da arena |
-| Constantes | `js/core/constants.js` | Valores nomeados documentados |
 
 ## Estado global (`sim`)
 
@@ -37,7 +39,9 @@ Módulos extraídos:
 8. **TileProps** — painel de propriedades e menu de contexto.
 9. **EditorDragDrop** — preview e estado de drag-and-drop.
 
-A lógica do editor está extraída. Ainda em `main.js`: paletas DOM, mouse do canvas, import/export, modo custom, simulação, construtores e shell (abas/teclado). O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
+A lógica do editor e o **shell** (abas, teclado, loop, placar, persist) estão extraídos.
+Ainda em `main.js`: paletas DOM, mouse do canvas, import/export, modo custom, simulação e construtores.
+O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
 
 ## Convenções
 
@@ -47,6 +51,6 @@ A lógica do editor está extraída. Ainda em `main.js`: paletas DOM, mouse do c
 
 ## Limitações conhecidas
 
-- `main.js` ainda é grande (~4,4k linhas); a extração segue `docs/modularization-plan.md`.
+- `main.js` ainda é grande (~4k linhas); fases 0–1 concluídas; extração segue `docs/modularization-plan.md`.
 - Multi-floor (gz) está parcialmente implementado; pathfinding e alguns fluxos assumem floor 0.
 - Não há suite de testes automatizados ainda — módulos novos devem ser escritos de forma testável.
