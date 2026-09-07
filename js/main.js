@@ -147,6 +147,29 @@ import {
   renderTilePalette as _renderTilePalette
 } from './editor/TilePalette.js';
 import { wireEditorInput } from './editor/EditorInput.js';
+import { scenarios as _scenarios } from './sim/Scenarios.js';
+import {
+  placeRobotAtStart as _placeRobotAtStart,
+  restartRobot as _restartRobot,
+  loadScenario as _loadScenario,
+  checkTileEvents as _checkTileEvents,
+  update as _updateSim
+} from './sim/Simulation.js';
+import {
+  localToWorld as _localToWorld,
+  sampleArenaColor as _sampleArenaColor,
+  sampleRegion as _sampleRegion,
+  detectorSamplePoints as _detectorSamplePoints,
+  updateSensors as _updateSensors,
+  updateSensorReadout as _updateSensorReadout
+} from './sim/Sensors.js';
+import {
+  setControlMode as _setControlMode,
+  compileRobotScript as _compileRobotScript,
+  runRobotScript as _runRobotScript,
+  wireRobotScriptUI
+} from './sim/RobotScript.js';
+
 
 const dataManager = new DataManager();
 
@@ -277,97 +300,9 @@ const sim = {
   officialMeta: null // metadados do último import oficial (name, duration, victims, tileSet…)
 };
 
-// ─── Scenarios ───────────────────────────────────────────────
-const scenarios = {
-  basic: {
-    name: 'Trajeto Básico + Obstáculo',
-    help: 'Obstáculo 20 pts, checkpoint, chegada.',
-    build() {
-      const t = [];
-      for (let i = 0; i < 8; i++) {
-        let type = TileType.STRAIGHT;
-        if (i === 0) type = TileType.START;
-        if (i === 7) type = TileType.FINISH;
-        if (i === 5) type = TileType.CHECKPOINT;
-        t.push(new Tile(i, 2, type));
-      }
-      return t;
-    },
-    objects() {
-      return [{ gx: 3, gy: 2, type: 'obstacle', rotation: 0, points: 20 }];
-    },
-    path(tiles) {
-      const pts = [];
-      for (let i = 0; i < 8; i++) {
-        const t = tiles[i];
-        const cx = t.worldX + TILE_PX / 2, cy = t.worldY + TILE_PX / 2;
-        if (i === 3) {
-          pts.push(new Vec(cx - 18, cy), new Vec(cx - 8, cy + 32), new Vec(cx + 8, cy + 32), new Vec(cx + 18, cy));
-        } else pts.push(new Vec(cx, cy));
-      }
-      return pts;
-    }
-  },
-  gap: {
-    name: 'Gap + Lombada',
-    help: 'Gap e lombada (10 pts cada).',
-    build() {
-      const t = [];
-      for (let i = 0; i < 7; i++) {
-        let type = TileType.STRAIGHT;
-        if (i === 0) type = TileType.START;
-        if (i === 6) type = TileType.FINISH;
-        if (i === 2) type = TileType.GAP;
-        if (i === 4) type = TileType.LOMBADA;
-        t.push(new Tile(i, 2, type));
-      }
-      return t;
-    },
-    path(tiles) { return tiles.map(t => new Vec(t.worldX + TILE_PX / 2, t.worldY + TILE_PX / 2)); }
-  },
-  intersection: {
-    name: 'Interseção com Verde',
-    help: 'Virar à esquerda na marcação verde.',
-    build() {
-      return [
-        new Tile(1, 2, TileType.START), new Tile(2, 2, TileType.STRAIGHT),
-        new Tile(3, 2, TileType.INTERSECTION, { hasGreen: true }),
-        new Tile(3, 1, TileType.STRAIGHT), new Tile(3, 0, TileType.FINISH),
-        new Tile(3, 3, TileType.STRAIGHT), new Tile(4, 2, TileType.STRAIGHT)
-      ];
-    },
-    path() {
-      return [
-        new Vec(1.5 * TILE_PX, 2.5 * TILE_PX), new Vec(2.5 * TILE_PX, 2.5 * TILE_PX),
-        new Vec(3.5 * TILE_PX, 2.5 * TILE_PX), new Vec(3.5 * TILE_PX, 1.5 * TILE_PX),
-        new Vec(3.5 * TILE_PX, 0.5 * TILE_PX)
-      ];
-    }
-  },
-  rescue: {
-    name: 'Sala de Resgate',
-    help: 'Entregar vítima viva na área verde (×1.3).',
-    build() {
-      return [
-        new Tile(0, 2, TileType.START), new Tile(1, 2, TileType.STRAIGHT),
-        new Tile(2, 2, TileType.RESCUE_ENTRY),
-        new Tile(3, 1, TileType.RESCUE_GREEN), new Tile(4, 1, TileType.RESCUE),
-        new Tile(3, 2, TileType.RESCUE), new Tile(4, 2, TileType.RESCUE_RED),
-        new Tile(5, 2, TileType.RESCUE_EXIT), new Tile(6, 2, TileType.STRAIGHT),
-        new Tile(7, 2, TileType.FINISH)
-      ];
-    },
-    path() {
-      return [
-        new Vec(0.5 * TILE_PX, 2.5 * TILE_PX), new Vec(1.5 * TILE_PX, 2.5 * TILE_PX),
-        new Vec(2.5 * TILE_PX, 2.5 * TILE_PX), new Vec(3.3 * TILE_PX, 1.7 * TILE_PX),
-        new Vec(3.5 * TILE_PX, 1.5 * TILE_PX), new Vec(3.7 * TILE_PX, 1.9 * TILE_PX),
-        new Vec(4.5 * TILE_PX, 2.5 * TILE_PX), new Vec(5.5 * TILE_PX, 2.5 * TILE_PX),
-        new Vec(6.5 * TILE_PX, 2.5 * TILE_PX), new Vec(7.5 * TILE_PX, 2.5 * TILE_PX)
-      ];
-    }
-  }
-};
+// ─── Scenarios (js/sim/Scenarios.js) ─────────────────────────
+const scenarios = _scenarios;
+
 
 // ─── Grid helpers (preserve tiles on resize) ─────────────────
 function ensureGridMatrix() {
@@ -400,308 +335,41 @@ function tileIsCheckpoint(t) {
   return _tileIsCheckpoint(t);
 }
 
+function getSimDeps() {
+  return {
+    tileIsStart,
+    tileIsFinish,
+    tileIsCheckpoint,
+    ensureGridMatrix,
+    clearLog,
+    updateScoreUI,
+    logUI,
+    updateGridStatus,
+    fitCamera,
+    draw,
+    inverseTransform
+  };
+}
+
 function placeRobotAtStart() {
-  if (sim.path.length) {
-    const s = sim.path[0];
-    sim.robot = new Robot(s.x, s.y, 0);
-    if (sim.path.length > 1) {
-      const d = sim.path[1].sub(s).norm();
-      sim.robot.angle = Math.atan2(d.y, d.x) + Math.PI / 2;
-    }
-    sim.robot.pathIndex = 0;
-    sim.startPos = { x: s.x, y: s.y, angle: sim.robot.angle };
-  } else {
-    const st = sim.tiles.find(t => tileIsStart(t));
-    const x = st ? st.worldX + TILE_PX / 2 : TILE_PX * 1.5;
-    const y = st ? st.worldY + TILE_PX / 2 : TILE_PX * 1.5;
-    sim.robot = new Robot(x, y, 0);
-    sim.startPos = { x, y, angle: 0 };
-  }
+  _placeRobotAtStart(sim, getSimDeps());
 }
 
 function restartRobot() {
-  // Sempre volta ao ladrilho START (tipo ou marcador) da arena
-  const st = sim.tiles.find(t => tileIsStart(t));
-  if (st) {
-    const x = st.worldX + TILE_PX / 2;
-    const y = st.worldY + TILE_PX / 2;
-    // orientação: se houver path, usa ângulo inicial; senão 0
-    let angle = 0;
-    if (sim.path.length > 1) {
-      const d = sim.path[1].sub(sim.path[0]).norm();
-      angle = Math.atan2(d.y, d.x) + Math.PI / 2;
-    } else if (sim.startPos) {
-      angle = sim.startPos.angle || 0;
-    }
-    sim.robot = new Robot(x, y, angle);
-    sim.startPos = { x, y, angle };
-  } else if (sim.startPos) {
-    sim.robot = new Robot(sim.startPos.x, sim.startPos.y, sim.startPos.angle || 0);
-  } else {
-    placeRobotAtStart();
-  }
-  sim.finished = false;
-  sim.running = false;
-  sim.lastTile = null;
-  sim.tilesSinceCP = 0;
-  if (sim.robot) {
-    sim.robot.pathIndex = 0;
-    sim.robot.vLinear = 0;
-    sim.robot.vAngular = 0;
-    if (sim.activeRobotDef) {
-      sim.robot.definition = sim.activeRobotDef;
-      sim.robot.width = (sim.activeRobotDef.body.w || 120) * MM_TO_WORLD;
-      sim.robot.height = (sim.activeRobotDef.body.h || 150) * MM_TO_WORLD;
-    }
-  }
-  sim.score.scoredHazards.clear();
-  sim.score.trajeto = 0;
-  sim.score.checkpoints = 0;
-  sim.score.finish = 0;
-  sim.score.multiplier = 1;
-  updateScoreUI();
-  document.getElementById('simState').textContent = 'Parado';
-  logUI({ t: sim.time, msg: st ? 'Robô voltou ao ladrilho START da arena.' : 'Robô voltou ao início.', category: 'info' });
-  draw();
+  _restartRobot(sim, getSimDeps());
 }
 
 function loadScenario(key) {
-  sim.objects = [];
-  sim.selectedObject = null;
-  if (key === 'custom') {
-    if (sim.customArena && sim.customArena.length) {
-      // infer grid size
-      let maxX = 0, maxY = 0;
-      sim.customArena.forEach(t => { maxX = Math.max(maxX, t.gx); maxY = Math.max(maxY, t.gy); });
-      sim.gridW = Math.max(sim.gridW, maxX + 1);
-      sim.gridH = Math.max(sim.gridH, maxY + 1);
-      document.getElementById('gridW').value = sim.gridW;
-      document.getElementById('gridH').value = sim.gridH;
-      document.getElementById('gridWVal').textContent = sim.gridW;
-      document.getElementById('gridHVal').textContent = sim.gridH;
-      sim.tiles = [];
-      ensureGridMatrix();
-      sim.customArena.forEach(o => {
-        const t = Tile.fromJSON(o);
-        const idx = sim.tiles.findIndex(x => x.gx === t.gx && x.gy === t.gy);
-        if (idx >= 0) sim.tiles[idx] = t;
-        else sim.tiles.push(t);
-      });
-      sim.path = [];
-      sim.currentScenario = 'custom';
-      if (sim.customArenaObjects) sim.objects = JSON.parse(JSON.stringify(sim.customArenaObjects));
-    } else {
-      logUI({ t: 0, msg: 'Nenhuma arena personalizada salva.', category: 'warning' });
-      return;
-    }
-  } else {
-    const sc = scenarios[key];
-    if (!sc) return;
-    sim.currentScenario = key;
-    const built = sc.build();
-    let maxX = 0, maxY = 0;
-    built.forEach(t => { maxX = Math.max(maxX, t.gx); maxY = Math.max(maxY, t.gy); });
-    sim.gridW = Math.max(8, maxX + 2);
-    sim.gridH = Math.max(5, maxY + 2);
-    document.getElementById('gridW').value = sim.gridW;
-    document.getElementById('gridH').value = sim.gridH;
-    document.getElementById('gridWVal').textContent = sim.gridW;
-    document.getElementById('gridHVal').textContent = sim.gridH;
-    sim.tiles = [];
-    ensureGridMatrix();
-    built.forEach(t => {
-      const idx = sim.tiles.findIndex(x => x.gx === t.gx && x.gy === t.gy);
-      if (idx >= 0) sim.tiles[idx] = t;
-    });
-    sim.path = sc.path(built);
-    if (typeof sc.objects === 'function') sim.objects = sc.objects();
-    else sim.objects = [];
-    document.getElementById('helpBox').textContent = sc.help;
-  }
-  sim.score.reset();
-  sim.time = 0;
-  sim.running = false;
-  sim.finished = false;
-  sim.tilesSinceCP = 0;
-  sim.attempt = 1;
-  sim.lastTile = null;
-  sim.selectedTile = null;
-  placeRobotAtStart();
-  document.getElementById('simState').textContent = 'Parado';
-  document.getElementById('failCount').textContent = '0';
-  document.getElementById('selectedInfo').textContent = '—';
-  clearLog();
-  updateScoreUI();
-  logUI({ t: 0, msg: 'Cenário: ' + (key === 'custom' ? 'Personalizada' : (scenarios[key] && scenarios[key].name) || key), category: 'info' });
-  const arenaLabelEl = document.getElementById('arenaLabel');
-  if (arenaLabelEl) arenaLabelEl.textContent = 'arena: ' + (key === 'custom' ? 'personalizada' : (scenarios[key] && scenarios[key].name) || key);
-  updateGridStatus();
-  fitCamera();
-  draw();
+  _loadScenario(sim, key, getSimDeps());
 }
 
-// ─── Update / score triggers ─────────────────────────────────
+// ─── Update / score triggers (js/sim/*) ───────────────────────
 function update(dt) {
-  // Em modo manual o robô continua móvel mesmo após "chegada" (finished);
-  // só o path automático da simulação trava em finished.
-  if (!sim.robot) return;
-  if (sim.finished && sim.mode !== 'manual') return;
-  const robot = sim.robot;
-  if (sim.mode === 'manual') {
-    const speed = MANUAL_LINEAR_SPEED * sim.speed;
-    const rot = MANUAL_ANGULAR_SPEED * sim.speed;
-    let dx = 0, dy = 0;
-    if (sim.keys['ArrowUp'] || sim.keys['w'] || sim.keys['W']) { dx += Math.sin(robot.angle) * speed * dt; dy -= Math.cos(robot.angle) * speed * dt; }
-    if (sim.keys['ArrowDown'] || sim.keys['s'] || sim.keys['S']) { dx -= Math.sin(robot.angle) * speed * dt; dy += Math.cos(robot.angle) * speed * dt; }
-    if (sim.keys['ArrowLeft'] || sim.keys['a'] || sim.keys['A']) robot.angle -= rot * dt;
-    if (sim.keys['ArrowRight'] || sim.keys['d'] || sim.keys['D']) robot.angle += rot * dt;
-    if (sim.keys['q'] || sim.keys['Q']) robot.angle -= rot * dt;
-    if (sim.keys['e'] || sim.keys['E']) robot.angle += rot * dt;
-    robot.pos.x += dx; robot.pos.y += dy;
-    checkTileEvents(robot);
-    updateSensors(robot);
-    updateSensorReadout();
-  } else if (sim.mode === 'sim' && sim.running) {
-    // Modo script: move só o sprite com base no script + sensores
-    if (sim.controlMode === 'script') {
-      updateSensors(robot);
-      runRobotScript(robot, dt);
-      const v = (robot.vLinear || 0) * MM_TO_WORLD * sim.speed;
-      const w = (robot.vAngular || 0) * sim.speed;
-      robot.angle += w * dt;
-      robot.pos.x += Math.sin(robot.angle) * v * dt;
-      robot.pos.y -= Math.cos(robot.angle) * v * dt;
-      checkTileEvents(robot);
-      updateSensorReadout();
-    } else {
-      // Path automático (comportamento original)
-      if (robot.pathIndex >= sim.path.length - 1) {
-        if (!sim.finished) {
-          sim.finished = true;
-          const ev = sim.score.scoreFinish(sim.time);
-          if (ev) logUI(ev);
-          sim.running = false;
-          document.getElementById('simState').textContent = 'Finalizado — Voltar ao Início';
-          logUI({ t: sim.time, msg: 'Chegada! Use "Voltar Robô ao Início".', category: 'success' });
-          updateScoreUI();
-        }
-        return;
-      }
-      const target = sim.path[robot.pathIndex + 1];
-      const to = target.sub(robot.pos);
-      if (to.len() < PATH_WAYPOINT_EPSILON) { robot.pathIndex++; checkTileEvents(robot); }
-      else {
-        const dir = to.norm();
-        robot.pos = robot.pos.add(dir.mul(PATH_FOLLOW_SPEED * sim.speed * dt));
-        robot.angle = Math.atan2(dir.y, dir.x) + Math.PI / 2;
-      }
-    }
-  }
-  if (sim.mode !== 'editor') {
-    sim.time += dt;
-    document.getElementById('simTime').textContent = sim.time.toFixed(1) + 's';
-  }
-  if (sim.robot) document.getElementById('robotPos').textContent = Math.round(sim.robot.pos.x) + ', ' + Math.round(sim.robot.pos.y);
+  _updateSim(sim, dt, getSimDeps());
 }
 
 function checkTileEvents(robot) {
-  const gx = Math.floor(robot.pos.x / TILE_PX);
-  const gy = Math.floor(robot.pos.y / TILE_PX);
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (!tile || tile === sim.lastTile || tile.type === TileType.EMPTY) return;
-  if (sim.lastTile) sim.tilesSinceCP++;
-  const id = tile.id;
-  let ev = null;
-
-  // objetos sobre este ladrilho
-  const objsHere = sim.objects.filter(o => o.gx === gx && o.gy === gy);
-  for (const o of objsHere) {
-    const oid = 'obj-' + o.gx + ',' + o.gy + '-' + o.type;
-    let pts = 0;
-    if (o.type === 'obstacle') pts = o.points != null ? o.points : 20;
-    else if (o.type === 'gangorra') pts = o.points != null ? o.points : 20;
-    else if (o.type === 'rampa') pts = o.points != null ? o.points : 10;
-    else if (o.type === 'custom') pts = (o.custom && o.custom.points != null) ? o.custom.points : (o.points != null ? o.points : 0);
-    if (pts !== 0 || o.type === 'custom') {
-      const pev = sim.score.scoreHazard(oid, pts, `Objeto ${o.type}${o.custom && o.custom.name ? ' "' + o.custom.name + '"' : ''} (${pts})`, sim.time);
-      if (pev) { logUI(pev); updateScoreUI(); }
-    }
-  }
-
-  if (tile.type === TileType.CUSTOM && tile.custom) {
-    const def = tile.custom;
-    const lx = (robot.pos.x - tile.worldX) / TILE_PX;
-    const ly = (robot.pos.y - tile.worldY) / TILE_PX;
-    const p = inverseTransform(lx, ly, tile.rotation, tile.mirrorH, tile.mirrorV);
-    let inZone = !def.zones || !def.zones.length;
-    if (def.zones) {
-      for (const z of def.zones) {
-        if (p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) { inZone = true; break; }
-      }
-    }
-    if (inZone) {
-      const pts = (def.points != null && Number.isFinite(Number(def.points))) ? Number(def.points) : 10;
-      ev = sim.score.scoreHazard(id, pts, `Custom "${def.name}" (${pts})`, sim.time);
-    }
-  } else {
-    switch (tile.type) {
-      case TileType.OBSTACLE: ev = sim.score.scoreHazard(id, 20, 'Obstáculo (20)', sim.time); break;
-      case TileType.GAP: ev = sim.score.scoreHazard(id, 10, 'Gap (10)', sim.time); break;
-      case TileType.LOMBADA: ev = sim.score.scoreHazard(id, 10, 'Lombada (10)', sim.time); break;
-      case TileType.GANGORRA: ev = sim.score.scoreHazard(id, 20, 'Gangorra (20)', sim.time); break;
-      case TileType.RAMPA: ev = sim.score.scoreHazard(id, 10, 'Rampa (10)', sim.time); break;
-      case TileType.INTERSECTION:
-      case TileType.INTERSECTION_T: ev = sim.score.scoreHazard(id, 10, 'Interseção (10)', sim.time); break;
-      case TileType.CHECKPOINT:
-        ev = sim.score.scoreCheckpoint(Math.max(1, sim.tilesSinceCP), sim.attempt, sim.time);
-        sim.tilesSinceCP = 0;
-        break;
-      case TileType.FINISH:
-        if (!sim.finished && sim.mode === 'manual') {
-          sim.finished = true;
-          ev = sim.score.scoreFinish(sim.time);
-          document.getElementById('simState').textContent = 'Finalizado — Voltar ao Início';
-        }
-        break;
-      case TileType.RESCUE_GREEN:
-        if (robot.carrying === 'alive') {
-          const mid = 'rg-' + id;
-          if (!sim.score.scoredHazards.has(mid)) {
-            sim.score.scoredHazards.add(mid);
-            ev = sim.score.addMultiplier(1.3, 'Vítima viva na Área Verde', sim.time);
-            robot.carrying = null;
-          }
-        }
-        break;
-      case TileType.RESCUE_RED:
-        if (robot.carrying === 'dead') {
-          const mid = 'rr-' + id;
-          if (!sim.score.scoredHazards.has(mid)) {
-            sim.score.scoredHazards.add(mid);
-            ev = sim.score.addMultiplier(1.1, 'Vítima morta na Área Vermelha', sim.time);
-            robot.carrying = null;
-          }
-        }
-        break;
-    }
-  }
-
-  // Marcadores no piso (sem depender do tipo start/finish/cp)
-  if (tileIsCheckpoint(tile) && tile.type !== TileType.CHECKPOINT) {
-    const cev = sim.score.scoreCheckpoint(Math.max(1, sim.tilesSinceCP), sim.attempt, sim.time);
-    if (cev) { logUI(cev); updateScoreUI(); sim.tilesSinceCP = 0; }
-  }
-  if (tileIsFinish(tile) && tile.type !== TileType.FINISH) {
-    if (!sim.finished && (sim.mode === 'manual' || sim.mode === 'sim')) {
-      sim.finished = true;
-      const fev = sim.score.scoreFinish(sim.time);
-      if (fev) { logUI(fev); updateScoreUI(); }
-      document.getElementById('simState').textContent = 'Finalizado — Voltar ao Início';
-    }
-  }
-
-  if (ev) { logUI(ev); updateScoreUI(); }
-  sim.lastTile = tile;
+  _checkTileEvents(sim, robot, getSimDeps());
 }
 
 // ─── Render (delegado a js/render/ArenaRenderer.js) ──────────
@@ -2838,194 +2506,46 @@ document.getElementById('btnRobotApply')?.addEventListener('click', () => {
   applyRobotDefToSim(currentRobotDefFromCtor());
 });
 
+// ─── Sensores + script (js/sim/Sensors.js, RobotScript.js) ───
 function localToWorld(robot, lx, ly) {
-  const x = lx * MM_TO_WORLD;
-  const y = -ly * MM_TO_WORLD;
-  const c = Math.cos(robot.angle), s = Math.sin(robot.angle);
-  return {
-    x: robot.pos.x + x * c - y * s,
-    y: robot.pos.y + x * s + y * c
-  };
+  return _localToWorld(robot, lx, ly);
 }
 
 function sampleArenaColor(wx, wy) {
-  const gx = Math.floor(wx / TILE_PX);
-  const gy = Math.floor(wy / TILE_PX);
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (!tile || tile.type === TileType.EMPTY) return { r: 15, g: 23, b: 42, lum: 20 };
-  if (tile.type === TileType.CUSTOM && tile.custom && tile._img) {
-    const img = tile._img;
-    const lx = (wx - tile.worldX) / TILE_PX;
-    const ly = (wy - tile.worldY) / TILE_PX;
-    if (img.complete && img.naturalWidth > 0) {
-      try {
-        const tc = document.createElement('canvas');
-        tc.width = 1; tc.height = 1;
-        const tctx = tc.getContext('2d');
-        const px = Math.max(0, Math.min(img.naturalWidth - 1, Math.floor(lx * img.naturalWidth)));
-        const py = Math.max(0, Math.min(img.naturalHeight - 1, Math.floor(ly * img.naturalHeight)));
-        tctx.drawImage(img, px, py, 1, 1, 0, 0, 1, 1);
-        const d = tctx.getImageData(0, 0, 1, 1).data;
-        return { r: d[0], g: d[1], b: d[2], lum: 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2] };
-      } catch (e) {}
-    }
-  }
-  const lx = (wx - tile.worldX) / TILE_PX;
-  const ly = (wy - tile.worldY) / TILE_PX;
-  const onLine = Math.abs(ly - 0.5) < 0.08 || Math.abs(lx - 0.5) < 0.08;
-  if (tile.type === TileType.GAP && Math.abs(lx - 0.5) < 0.15 && Math.abs(ly - 0.5) < 0.12)
-    return { r: 168, g: 85, b: 247, lum: 120 };
-  if (tile.opts && tile.opts.hasGreen && lx < 0.25 && ly < 0.25)
-    return { r: 34, g: 197, b: 94, lum: 140 };
-  if (onLine) return { r: 30, g: 41, b: 59, lum: 35 };
-  return { r: 226, g: 232, b: 240, lum: 230 };
+  return _sampleArenaColor(sim, wx, wy);
 }
 
 function sampleRegion(robot, points) {
-  let r = 0, g = 0, b = 0, n = 0;
-  for (const p of points) {
-    const c = sampleArenaColor(p.x, p.y);
-    r += c.r; g += c.g; b += c.b; n++;
-  }
-  if (!n) return { r: 0, g: 0, b: 0, lum: 0 };
-  r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
-  return { r, g, b, lum: 0.299 * r + 0.587 * g + 0.114 * b };
+  return _sampleRegion(sim, points);
 }
 
 function detectorSamplePoints(robot, d) {
-  const pts = [];
-  if (d.kind === 'under') {
-    const steps = 3;
-    for (let iy = 0; iy < steps; iy++) {
-      for (let ix = 0; ix < steps; ix++) {
-        const lx = d.x - d.w / 2 + (ix + 0.5) * d.w / steps;
-        const ly = d.y - d.h / 2 + (iy + 0.5) * d.h / steps;
-        pts.push(localToWorld(robot, lx, ly));
-      }
-    }
-  } else {
-    const ox = d.offsetX || 0;
-    const oy = d.offsetY != null ? d.offsetY : (robot.definition?.body?.h || sim.activeRobotDef?.body?.h || 150) / 2;
-    const len = d.length || 60, wid = d.width || 40;
-    const stepsX = 4, stepsY = 5;
-    for (let iy = 0; iy < stepsY; iy++) {
-      for (let ix = 0; ix < stepsX; ix++) {
-        const u = (ix + 0.5) / stepsX;
-        const v = (iy + 0.5) / stepsY;
-        let lx, ly;
-        if (d.shape === 'triangle') {
-          const half = (wid / 2) * (1 - v);
-          lx = ox - half + u * (2 * half);
-          ly = oy + v * len;
-        } else {
-          lx = ox - wid / 2 + u * wid;
-          ly = oy + v * len;
-        }
-        pts.push(localToWorld(robot, lx, ly));
-      }
-    }
-  }
-  return pts;
+  return _detectorSamplePoints(robot, d, sim.activeRobotDef);
 }
 
 function updateSensors(robot) {
-  if (!robot) return;
-  const def = robot.definition || sim.activeRobotDef;
-  robot.sensorReadings = {};
-  if (!def || !def.detectors) return;
-  for (const d of def.detectors) {
-    const pts = detectorSamplePoints(robot, d);
-    robot.sensorReadings[d.name || d.id] = sampleRegion(robot, pts);
-  }
+  _updateSensors(sim, robot);
 }
 
 function updateSensorReadout() {
-  const el = document.getElementById('sensorReadout');
-  if (!el || !sim.robot) return;
-  const s = sim.robot.sensorReadings || {};
-  const keys = Object.keys(s);
-  if (!keys.length) { el.textContent = 'sensores: (defina robô na aba 6)'; return; }
-  el.innerHTML = keys.map(k => {
-    const v = s[k];
-    return `<div>${k}: rgb(${v.r},${v.g},${v.b}) L=${v.lum.toFixed(0)}</div>`;
-  }).join('');
+  _updateSensorReadout(sim);
 }
 
 function setControlMode(mode) {
-  sim.controlMode = mode;
-  const bp = document.getElementById('btnControlPath');
-  const bs = document.getElementById('btnControlScript');
-  if (bp) { bp.classList.toggle('active-tool', mode === 'path'); bp.classList.toggle('primary', mode === 'path'); }
-  if (bs) { bs.classList.toggle('active-tool', mode === 'script'); bs.classList.toggle('primary', mode === 'script'); }
-  if (sim.robot) { sim.robot.vLinear = 0; sim.robot.vAngular = 0; }
-  logUI({ t: 0, msg: mode === 'script' ? 'Controle: Script.' : 'Controle: Path.', category: 'info' });
+  _setControlMode(sim, mode, { logUI });
 }
-document.getElementById('btnControlPath')?.addEventListener('click', () => setControlMode('path'));
-document.getElementById('btnControlScript')?.addEventListener('click', () => setControlMode('script'));
 
 function compileRobotScript(src) {
-  try {
-    const body = src.includes('function update')
-      ? src + '\n; return update;'
-      : `function update(sensors, dt) {\n${src}\n}\n; return update;`;
-    const fn = new Function(body)();
-    if (typeof fn !== 'function') throw new Error('Defina function update(sensors, dt)');
-    sim.scriptFn = fn;
-    sim.scriptError = null;
-    logUI({ t: 0, msg: 'Script aplicado.', category: 'success' });
-    return true;
-  } catch (err) {
-    sim.scriptFn = null;
-    sim.scriptError = String(err.message || err);
-    logUI({ t: 0, msg: 'Erro no script: ' + sim.scriptError, category: 'warning' });
-    return false;
-  }
+  return _compileRobotScript(sim, src, { logUI });
 }
 
 function runRobotScript(robot, dt) {
-  if (!sim.scriptFn) return;
-  const sensors = robot.sensorReadings || {};
-  try {
-    const prevV = window.setVelocity;
-    const prevS = window.stop;
-    window.setVelocity = (nv, nw) => {
-      robot.vLinear = Number(nv) || 0;
-      robot.vAngular = Number(nw) || 0;
-    };
-    window.stop = () => { robot.vLinear = 0; robot.vAngular = 0; };
-    sim.scriptFn(sensors, dt);
-    window.setVelocity = prevV;
-    window.stop = prevS;
-  } catch (err) {
-    robot.vLinear = 0;
-    robot.vAngular = 0;
-    if (!sim.scriptError) {
-      sim.scriptError = String(err.message || err);
-      logUI({ t: sim.time, msg: 'Runtime script: ' + sim.scriptError, category: 'warning' });
-    }
-  }
+  _runRobotScript(sim, robot, dt, { logUI });
 }
 
-document.getElementById('btnScriptApply')?.addEventListener('click', () => {
-  compileRobotScript(document.getElementById('robotScript')?.value || '');
-  setControlMode('script');
-});
-document.getElementById('btnScriptExample')?.addEventListener('click', () => {
-  const ex = `// Seguidor de linha (line_left / line_right)
-function update(sensors, dt) {
-  const L = sensors.line_left ? sensors.line_left.lum : 200;
-  const R = sensors.line_right ? sensors.line_right.lum : 200;
-  const leftOn = L < 80;
-  const rightOn = R < 80;
-  if (leftOn && rightOn) setVelocity(50, 0);
-  else if (leftOn) setVelocity(30, -1.2);
-  else if (rightOn) setVelocity(30, 1.2);
-  else setVelocity(35, 0.4);
-}`;
-  document.getElementById('robotScript').value = ex;
-  compileRobotScript(ex);
-  setControlMode('script');
-});
+wireRobotScriptUI(sim, { logUI });
+
+
 
 window.addEventListener('resize', () => {
   if (sim.mode === 'robot') { fitRobotCtorCanvas(); drawRobotCtor(); }

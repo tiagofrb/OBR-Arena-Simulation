@@ -66,6 +66,11 @@ Próximos passos sugeridos (editor):
 - `js/editor/TilePalette.js`, `OfficialCatalog.js`, `EditorInput.js`, `ArenaIO.js`, `CustomMode.js`
 - `main.js` ~3,5k linhas; `wireEditorCanvas()` no bootstrap
 
+### Parte 8 — Simulação (Fase 3) ✅
+
+- `js/sim/Scenarios.js`, `Simulation.js`, `ManualControl.js`, `Sensors.js`, `RobotScript.js`
+- `main.js` ~3,1k linhas
+
 ### Próximo — resto da modularização
 
-Roteiro em `docs/modularization-plan.md`: Fase 3 (simulação/manual) → paint compartilhado → construtores.
+Roteiro em `docs/modularization-plan.md`: Fase 4 (paint compartilhado) → Fase 5–6 (construtores).

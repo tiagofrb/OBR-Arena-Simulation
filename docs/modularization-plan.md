@@ -135,21 +135,21 @@ Wrappers finos permanecem no `main` para deps; `BUILTIN_TILE_DEFS` (morto) remov
 
 **Critério de pronto:** editar arena (paleta, mouse, import/export, modo custom) sem a lógica inline no `main`.
 
-### Fase 3 — Simulação e controle manual
+### Fase 3 — Simulação e controle manual ✅
 
 | Módulo | Conteúdo |
 |--------|----------|
-| `sim/Scenarios.js` | objeto `scenarios` (basic, gap, intersection, rescue) |
-| `sim/Simulation.js` | `loadScenario`, `placeRobotAtStart`, `restartRobot`, `checkTileEvents` |
-| `sim/ManualControl.js` | leitura de `sim.keys` → pose |
-| `sim/Sensors.js` | `detectorSamplePoints`, `sampleRegion`, `updateSensors`, readout |
-| `sim/RobotScript.js` | compile / `runRobotScript` / `setControlMode` |
+| `sim/Scenarios.js` | `scenarios` (basic, gap, intersection, rescue) |
+| `sim/Simulation.js` | `loadScenario`, `placeRobotAtStart`, `restartRobot`, `checkTileEvents`, `update` |
+| `sim/ManualControl.js` | `applyManualControl` (WASD/setas → pose) |
+| `sim/Sensors.js` | `localToWorld`, sample, `updateSensors`, readout |
+| `sim/RobotScript.js` | compile / run / `setControlMode` + wiring UI |
 
-`update(dt)` vira um orquestrador de 20–40 linhas que escolhe manual vs path vs script.
+`main.js` só mantém wrappers + `getSimDeps()`.
 
-**Limitação conhecida (manter honesta):** `checkTileEvents` e o path automático ainda assumem floor 0 em vários fluxos; não “consertar” multi-andar nesta extração, só não esconder o fato.
+**Limitação conhecida (manter honesta):** `checkTileEvents` e o path automático ainda assumem floor 0 em vários fluxos; não “consertar” multi-andar nesta extração.
 
-**Critério de pronto:** Play/Pause/Step, cenários, WASD, script e sensores com o mesmo comportamento, código fora do `main`.
+**Critério de pronto:** Play/Pause/Step, cenários, WASD, script e sensores com o mesmo comportamento, lógica fora do `main`.
 
 ### Fase 4 — Motor de pintura compartilhado
 
