@@ -49,3 +49,7 @@ Próximos passos sugeridos (editor):
 - `MapMeta.js`, `TileProps.js`, `EditorDragDrop.js`
 - Sprite do robô restaurado em `ArenaRenderer` (corpo/rodas/frente/detectores)
 - `main.js` ~4.4k linhas
+
+### Próximo — resto da modularização (planejado, não iniciado)
+
+Roteiro em `docs/modularization-plan.md`: higiene de wrappers → shell → paletas/I/O do editor → simulação/manual → paint compartilhado → construtores.

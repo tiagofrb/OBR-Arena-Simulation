@@ -9,6 +9,8 @@ Inventário de funcionalidades do programa.
 
 Não iniciar implementação de testes até nova instrução.
 
+Modularização pendente (fora do editor): ver `docs/modularization-plan.md`.
+
 ---
 
 ## 1. Shell da aplicação

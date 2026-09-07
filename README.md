@@ -69,7 +69,8 @@ Não requer instalação, build ou dependências externas — roda direto no nav
 │   └── storage/
 │       └── DataManager.js
 ├── docs/
-│   └── architecture.md            # decisões técnicas e roadmap de módulos
+│   ├── architecture.md            # decisões técnicas
+│   └── modularization-plan.md     # o que ainda falta extrair de main.js
 ├── AGENTS.md                      # diretrizes de código para contribuidores/LLMs
 ├── CHANGELOG.md
 └── assets/

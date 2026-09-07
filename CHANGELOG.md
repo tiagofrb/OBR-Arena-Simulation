@@ -8,6 +8,7 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
 ## [Unreleased]
 
 ### Added
+- `docs/modularization-plan.md` — plano para extrair o restante de `main.js` (shell, editor UI, simulação, construtores)
 - Módulos do editor de arena:
   - `js/editor/ArenaHistory.js` — undo/redo
   - `js/editor/GridManager.js` — grade
@@ -23,6 +24,7 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
 - `AGENTS.md`, `docs/architecture.md`
 
 ### Changed
+- `docs/architecture.md` aponta o plano de modularização; lista MapMeta / TileProps / EditorDragDrop como já extraídos
 - `main.js` delega histórico, grade, câmera, operações de tile, ferramentas e render aos módulos
 - `Models.js` reexporta `TILE_PX` / `LINE_W` a partir de `constants.js`
 - `isTypingTarget` endurecido (corrige issue #1 — teclas 1–6 em inputs)

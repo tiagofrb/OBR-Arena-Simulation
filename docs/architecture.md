@@ -10,7 +10,7 @@ Principais camadas:
 
 | Camada | Local | Responsabilidade |
 |--------|-------|------------------|
-| UI / orquestração | `js/main.js` | Eventos DOM, modo (aba), wiring, estado global `sim` |
+| UI / orquestração | `js/main.js` | Eventos DOM, modo (aba), wiring, estado global `sim` (ainda monolítico; ver plano) |
 | Modelos | `js/engine/Models.js` | `Tile`, `Robot`, `Vec`, `TileType` |
 | Pontuação | `js/engine/ScoreEngine.js` | Regras OBR de pontuação |
 | Persistência | `js/storage/DataManager.js` | IndexedDB + espelho localStorage |
@@ -33,24 +33,20 @@ Módulos extraídos:
 4. **TileOperations** — `placeTileAt`, `clearTileAt`, `moveTile`, rotação/espelho, `clearArena`.
 5. **EditorTools** — seleção de ferramenta, camada do painel, cancelamento, helpers de marcadores.
 6. **ArenaRenderer** — pipeline `drawArena`, tiles (oficial/custom/builtin), objetos, robô, medição.
+7. **MapMeta** — metadados do mapa e andares.
+8. **TileProps** — painel de propriedades e menu de contexto.
+9. **EditorDragDrop** — preview e estado de drag-and-drop.
 
-Ainda em `main.js` (próximas extrações possíveis):
-
-- Wiring DOM da paleta oficial/custom e drag-and-drop
-- Context menu e painel de propriedades do tile
-- MapMeta / floors (multi-andar)
-- Construtores (tile / objeto / robô) — fora do escopo atual do editor
-
-Isso prepara multi-seleção, layers ricas, plugins de ferramentas e testes unitários dos módulos puros.
+A lógica do editor está extraída. Ainda em `main.js`: paletas DOM, mouse do canvas, import/export, modo custom, simulação, construtores e shell (abas/teclado). O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
 
 ## Convenções
 
 - Seguir `AGENTS.md` (sem código morto, sem valores mágicos, testes e docs na mesma mudança).
-- Preferir funções puras ou com dependências injetadas (`deps`) nos módulos de editor/render.
+- Preferir funções puras ou com dependências injetadas (`deps`) nos módulos extraídos.
 - Manter o motor de simulação/pontuação estável; mudanças de UI e editor não devem quebrar regras OBR.
 
 ## Limitações conhecidas
 
-- `main.js` ainda é grande; a extração é incremental.
+- `main.js` ainda é grande (~4,4k linhas); a extração segue `docs/modularization-plan.md`.
 - Multi-floor (gz) está parcialmente implementado; pathfinding e alguns fluxos assumem floor 0.
 - Não há suite de testes automatizados ainda — módulos novos devem ser escritos de forma testável.
