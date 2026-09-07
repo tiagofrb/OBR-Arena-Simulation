@@ -76,6 +76,11 @@ Próximos passos sugeridos (editor):
 - `js/constructors/paint/PaintBuffer.js`, `CtorCamera.js`
 - `main.js` ~2,9k linhas
 
+### Parte 10 — Construtores tile/obj (Fase 5) ✅
+
+- `js/constructors/TileConstructor.js`, `ObjectConstructor.js`
+- `main.js` ~2,0k linhas
+
 ### Próximo — resto da modularização
 
-Roteiro em `docs/modularization-plan.md`: Fase 5–6 (construtores tile/obj/robô).
+Roteiro em `docs/modularization-plan.md`: Fase 6 (robô) → limpeza residual.

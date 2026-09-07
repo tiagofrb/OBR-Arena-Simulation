@@ -163,14 +163,14 @@ Constantes: `CTOR_GRID_CELLS`, `CTOR_TILE_CANVAS_MM`, `CTOR_HISTORY_MAX`.
 
 **Critério de pronto:** uma única implementação de pincel; ambos usam `PaintBuffer` + `CtorCamera`.
 
-### Fase 5 — Construtor de ladrilho e de objeto
+### Fase 5 — Construtor de ladrilho e de objeto ✅
 
 | Módulo | Conteúdo |
 |--------|----------|
-| `constructors/TileConstructor.js` | open/close tab, `drawCtor`, biblioteca custom, `bufferToCustomDef` |
-| `constructors/ObjectConstructor.js` | idem para objetos, `refreshObjLibrary` |
+| `constructors/TileConstructor.js` | estado, draw, open/close, library, bufferToCustomDef, wire canvas/UI |
+| `constructors/ObjectConstructor.js` | idem para objetos + `refreshObjLibrary` / save |
 
-Bindings de botões (`setCtorColor`, brush, grid lock) saem do `main`.
+`main.js` mantém wrappers finos + `ctor` / `objCtor` para o teclado.
 
 ### Fase 6 — Construtor de robô
 

@@ -33,11 +33,7 @@ import {
   MANUAL_LINEAR_SPEED,
   MANUAL_ANGULAR_SPEED,
   PATH_FOLLOW_SPEED,
-  PATH_WAYPOINT_EPSILON,
-  CTOR_SIZE_MM,
-  CTOR_GRID_CELLS,
-  CTOR_TILE_CANVAS_MM,
-  CTOR_HISTORY_MAX
+  PATH_WAYPOINT_EPSILON
 } from './core/constants.js';
 import {
   snapshotArena as _snapshotArena,
@@ -174,25 +170,47 @@ import {
   wireRobotScriptUI
 } from './sim/RobotScript.js';
 import {
-  initPaintBuffer,
-  clearPaintBuffer,
-  pushPaintUndo,
-  undoPaint,
-  redoPaint,
-  stampAt as _stampAt,
-  strokeLineOnBuf as _strokeLineOnBuf,
-  paintAt as _paintAtShared,
-  pickColorAt,
-  whiteBg
-} from './constructors/paint/PaintBuffer.js';
+  CELL_MM as _CELL_MM,
+  GRID_CELLS as _GRID_CELLS,
+  CANVAS_MM as _CANVAS_MM,
+  createCtorState,
+  initCtorBuffer as _initCtorBuffer,
+  clearCtorBuffer as _clearCtorBuffer,
+  fitCtorCanvas as _fitCtorCanvas,
+  setCtorZoom as _setCtorZoomTile,
+  drawCtor as _drawCtor,
+  openConstructorTab as _openConstructorTab,
+  closeConstructorTab as _closeConstructorTab,
+  bufferToCustomDef as _bufferToCustomDef,
+  loadCustomTileIntoCtor as _loadCustomTileIntoCtor,
+  refreshCustomSelect as _refreshCustomSelect,
+  wireTileCtorCanvas,
+  wireTileCtorUI,
+  pushUndo as _pushUndo,
+  undoCtor as _undoCtor,
+  redoCtor as _redoCtor,
+  paintAt as _paintAtTile,
+  ctorPos as _ctorPos
+} from './constructors/TileConstructor.js';
 import {
-  fitCtorCamera,
-  setCtorZoom as _setCtorZoomCam,
-  screenToCtorWorld,
-  panCtorCamera,
-  beginCtorPan,
-  endCtorPan
-} from './constructors/paint/CtorCamera.js';
+  OBJ_MM as _OBJ_MM,
+  createObjCtorState,
+  initObjBuf as _initObjBuf,
+  fitObjCtorCanvas as _fitObjCtorCanvas,
+  setObjCtorZoom as _setObjCtorZoom,
+  drawObjCtor as _drawObjCtor,
+  openObjConstructorTab as _openObjConstructorTab,
+  closeObjConstructorTab as _closeObjConstructorTab,
+  refreshObjLibrary as _refreshObjLibrary,
+  wireObjCtorCanvas,
+  wireObjCtorUI,
+  pushObjUndo as _pushObjUndo,
+  undoObjCtor as _undoObjCtor,
+  redoObjCtor as _redoObjCtor,
+  paintObjAt as _paintObjAt,
+  objCtorPos as _objCtorPos
+} from './constructors/ObjectConstructor.js';
+
 
 const dataManager = new DataManager();
 
@@ -427,59 +445,19 @@ function clearLog() {
 }
 
 function loadCustomTileIntoCtor(idx) {
-  const def = sim.customLibrary[idx];
-  if (!def) return;
-  if (!ctor.buf) initCtorBuffer();
-  clearCtorBuffer();
-  const img = new Image();
-  img.onload = () => {
-    // se tiver fullBitmap (3×3), usa; senão coloca só o tile no centro
-    if (def.fullBitmap) {
-      const full = new Image();
-      full.onload = () => {
-        ctor.bufCtx.drawImage(full, 0, 0, CANVAS_MM, CANVAS_MM);
-        drawCtor();
-      };
-      full.src = def.fullBitmap;
-    } else if (def.bitmap) {
-      ctor.bufCtx.drawImage(img, CELL_MM, CELL_MM, CELL_MM, CELL_MM);
-      drawCtor();
-    }
-  };
-  img.src = def.bitmap || def.fullBitmap || '';
-  document.getElementById('ctorName').value = def.name || 'Meu Ladrilho';
-  document.getElementById('ctorPoints').value = (def.points != null && Number.isFinite(Number(def.points))) ? Number(def.points) : 10;
-  ctor.editingIndex = idx;
-  logUI({ t: 0, msg: `Ladrilho "${def.name}" carregado para edição.`, category: 'info' });
-  setMode('constructor');
+  _loadCustomTileIntoCtor(sim, ctor, idx, {
+    drawCtor,
+    logUI,
+    setMode
+  });
 }
 
 function refreshCustomSelect() {
-  const lib = document.getElementById('customLibrary');
-  if (!sim.customLibrary.length) lib.textContent = 'Nenhum ainda.';
-  else {
-    lib.innerHTML = sim.customLibrary.map((c, i) =>
-      `<div class="lib-item"><span><strong>${c.name}</strong> — ${(c.points != null && Number.isFinite(Number(c.points))) ? Number(c.points) : 10}pts</span>
-       <span style="display:flex;gap:0.25rem">
-         <button data-edit="${i}" class="primary">Editar</button>
-         <button data-del="${i}" class="danger">Excluir</button>
-       </span></div>`
-    ).join('');
-    lib.querySelectorAll('button[data-del]').forEach(btn => {
-      btn.onclick = () => {
-        const i = parseInt(btn.dataset.del);
-        if (confirm(`Excluir "${sim.customLibrary[i].name}"?`)) {
-          sim.customLibrary.splice(i, 1);
-          persist('obr_custom_tiles', sim.customLibrary);
-          refreshCustomSelect();
-        }
-      };
-    });
-    lib.querySelectorAll('button[data-edit]').forEach(btn => {
-      btn.onclick = () => loadCustomTileIntoCtor(parseInt(btn.dataset.edit));
-    });
-  }
-  renderTilePalette();
+  _refreshCustomSelect(sim, {
+    persist,
+    loadCustomTileIntoCtor,
+    renderTilePalette
+  });
 }
 
 // ─── Paleta de ladrilhos (js/editor/TilePalette.js) ──────────
@@ -549,413 +527,34 @@ function setMode(mode) {
 // ─── Editor mouse (js/editor/EditorInput.js) ─────────────────
 // wired in wireEditorCanvas() after helper defs exist
 
-// ─── Constructor pixel 3×3 (centro 300×300 mm, 1px=1mm) + grid lock ─
-const CELL_MM = CTOR_SIZE_MM;
-const GRID_CELLS = CTOR_GRID_CELLS;
-const CANVAS_MM = CTOR_TILE_CANVAS_MM;
-const ctor = {
-  tool: 'paint',
-  color: '#000000',
-  brush: 20,
-  shape: 'round',
-  gridLock: 10,
-  painting: false,
-  buf: null,
-  bufCtx: null,
-  scale: 1,
-  ox: 0,
-  oy: 0,
-  panning: false,
-  lastX: 0,
-  lastY: 0,
-  // undo / redo
-  undoStack: [],
-  redoStack: [],
-  maxHistory: CTOR_HISTORY_MAX,
-  strokeSaved: false,
-  cursorX: null,
-  cursorY: null,
-  // linha entre 2 pontos
-  lineStart: null,  // {x,y} ou null
-  editingIndex: null  // índice na biblioteca quando editando ladrilho existente
-};
-
+// ─── Constructor de ladrilho (js/constructors/TileConstructor.js) ─
+const CELL_MM = _CELL_MM;
+const GRID_CELLS = _GRID_CELLS;
+const CANVAS_MM = _CANVAS_MM;
+const ctor = createCtorState();
 const ctorCanvas = document.getElementById('ctorCanvas');
-const ctorCtx = ctorCanvas.getContext('2d');
+const ctorCtx = ctorCanvas ? ctorCanvas.getContext('2d') : null;
 
-function initCtorBuffer() {
-  initPaintBuffer(ctor, CANVAS_MM);
-}
-
-function clearCtorBuffer() {
-  clearPaintBuffer(ctor, CANVAS_MM);
-}
-
+function initCtorBuffer() { _initCtorBuffer(ctor); }
+function clearCtorBuffer() { _clearCtorBuffer(ctor); }
+function fitCtorCanvas() { _fitCtorCanvas(ctorCanvas, ctorCtx, ctor); }
+function setCtorZoom(factor) { _setCtorZoomTile(ctorCanvas, ctor, factor, drawCtor); }
+function drawCtor() { _drawCtor(ctorCanvas, ctorCtx, ctor); }
 function openConstructorTab() {
-  try {
-    if (!ctor.buf) initCtorBuffer();
-    // Esconde todos os outros canvases
-    document.getElementById('arena')?.classList.add('hidden');
-    document.getElementById('arenaZoomBar')?.classList.add('hidden');
-    document.getElementById('objCtorCanvas')?.classList.add('hidden');
-    document.getElementById('objCtorZoomBar')?.classList.add('hidden');
-    document.getElementById('robotCtorCanvas')?.classList.add('hidden');
-    document.getElementById('robotCtorZoomBar')?.classList.add('hidden');
-    if (ctorCanvas) ctorCanvas.classList.remove('hidden');
-    document.getElementById('ctorZoomBar')?.classList.remove('hidden');
-    // sync UI
-    setGridLock(ctor.gridLock || 10);
-    const brushEl = document.getElementById('brushSize');
-    if (brushEl) brushEl.value = ctor.brush;
-    const brushLbl = document.getElementById('brushSizeLabel');
-    if (brushLbl) brushLbl.textContent = ctor.brush + ' mm';
-    const brushNum = document.getElementById('brushSizeNum');
-    if (brushNum) brushNum.value = ctor.brush;
-    const sw = document.getElementById('activeColorSwatch');
-    if (sw) sw.style.background = ctor.color;
-    fitCtorCanvas();
-    drawCtor();
-  } catch (err) {
-    console.error('openConstructorTab:', err);
-    logUI({ t: 0, msg: 'Erro ao abrir construtor: ' + err.message, category: 'error' });
-  }
-}
-
-function closeConstructorTab() {
-  if (ctorCanvas) ctorCanvas.classList.add('hidden');
-  document.getElementById('ctorZoomBar')?.classList.add('hidden');
-}
-
-function fitCtorCanvas() {
-  fitCtorCamera(ctorCanvas, ctorCtx, ctor, CANVAS_MM, { pad: 20, maxFit: 2 });
-}
-
-function setCtorZoom(factor) {
-  _setCtorZoomCam(ctorCanvas, ctor, factor, { min: 0.08, max: 4 });
-  drawCtor();
-}
-
-function drawCtor() {
-  if (!ctor.buf) return;
-  const cssW = ctorCanvas.clientWidth;
-  const cssH = ctorCanvas.clientHeight;
-  ctorCtx.save();
-  ctorCtx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-  ctorCtx.fillStyle = '#0b1220';
-  ctorCtx.fillRect(0, 0, cssW, cssH);
-
-  ctorCtx.translate(ctor.ox, ctor.oy);
-  ctorCtx.scale(ctor.scale, ctor.scale);
-  ctorCtx.imageSmoothingEnabled = false;
-  ctorCtx.drawImage(ctor.buf, 0, 0);
-
-  // cell borders 3×3
-  const cell = CELL_MM;
-  ctorCtx.strokeStyle = '#3b82f6';
-  ctorCtx.lineWidth = 2 / ctor.scale;
-  ctorCtx.strokeRect(cell, cell, cell, cell);
-  ctorCtx.strokeStyle = 'rgba(148,163,184,0.55)';
-  ctorCtx.lineWidth = 1 / ctor.scale;
-  for (let i = 0; i <= 3; i++) {
-    ctorCtx.beginPath(); ctorCtx.moveTo(i * cell, 0); ctorCtx.lineTo(i * cell, CANVAS_MM); ctorCtx.stroke();
-    ctorCtx.beginPath(); ctorCtx.moveTo(0, i * cell); ctorCtx.lineTo(CANVAS_MM, i * cell); ctorCtx.stroke();
-  }
-
-  // Cruz vermelha clara no centro de CADA célula 3×3 (eixo H/V)
-  ctorCtx.strokeStyle = 'rgba(239, 68, 68, 0.45)';
-  ctorCtx.lineWidth = 1 / ctor.scale;
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 3; col++) {
-      const cx = col * cell + cell / 2;
-      const cy = row * cell + cell / 2;
-      // horizontal
-      ctorCtx.beginPath();
-      ctorCtx.moveTo(col * cell, cy);
-      ctorCtx.lineTo((col + 1) * cell, cy);
-      ctorCtx.stroke();
-      // vertical
-      ctorCtx.beginPath();
-      ctorCtx.moveTo(cx, row * cell);
-      ctorCtx.lineTo(cx, (row + 1) * cell);
-      ctorCtx.stroke();
-    }
-  }
-
-  // label
-  ctorCtx.fillStyle = '#94a3b8';
-  ctorCtx.font = `${12 / ctor.scale}px sans-serif`;
-  ctorCtx.textAlign = 'center';
-  ctorCtx.fillText('LADRILHO 300×300 mm', CANVAS_MM / 2, cell + 14 / ctor.scale);
-
-  // grid lock no centro
-  if (ctor.gridLock > 1) {
-    const step = ctor.gridLock;
-    ctorCtx.strokeStyle = 'rgba(59,130,246,0.12)';
-    ctorCtx.lineWidth = 1 / ctor.scale;
-    for (let x = cell; x <= cell * 2; x += step) {
-      ctorCtx.beginPath(); ctorCtx.moveTo(x, cell); ctorCtx.lineTo(x, cell * 2); ctorCtx.stroke();
-    }
-    for (let y = cell; y <= cell * 2; y += step) {
-      ctorCtx.beginPath(); ctorCtx.moveTo(cell, y); ctorCtx.lineTo(cell * 2, y); ctorCtx.stroke();
-    }
-  }
-
-  // Preview do pincel ou da linha (2 pontos)
-  if (ctor.cursorX != null && ctor.cursorY != null && !ctor.panning) {
-    ctorCtx.save();
-    if (ctor.tool === 'line' || ctor.tool === 'measure') {
-      const lw = Math.max(1, ctor.brush | 0);
-      if (ctor.tool === 'measure') {
-        ctorCtx.lineWidth = 1.5 / ctor.scale;
-        ctorCtx.strokeStyle = 'rgba(234,179,8,0.95)';
-        ctorCtx.setLineDash([6 / ctor.scale, 4 / ctor.scale]);
-        if (ctor.lineStart) {
-          ctorCtx.beginPath();
-          ctorCtx.moveTo(ctor.lineStart.x, ctor.lineStart.y);
-          ctorCtx.lineTo(ctor.cursorX, ctor.cursorY);
-          ctorCtx.stroke();
-          const dist = Math.hypot(ctor.cursorX - ctor.lineStart.x, ctor.cursorY - ctor.lineStart.y);
-          ctorCtx.setLineDash([]);
-          ctorCtx.fillStyle = '#fbbf24';
-          ctorCtx.font = `${13 / ctor.scale}px sans-serif`;
-          ctorCtx.textAlign = 'center';
-          ctorCtx.fillText(dist.toFixed(1) + ' mm', (ctor.lineStart.x + ctor.cursorX) / 2, (ctor.lineStart.y + ctor.cursorY) / 2 - 8 / ctor.scale);
-        }
-      } else {
-        // preview linha com espessura e forma
-        ctorCtx.strokeStyle = 'rgba(59,130,246,0.7)';
-        ctorCtx.fillStyle = 'rgba(59,130,246,0.35)';
-        ctorCtx.lineCap = ctor.shape === 'square' ? 'square' : 'round';
-        ctorCtx.lineJoin = ctor.shape === 'square' ? 'miter' : 'round';
-        ctorCtx.lineWidth = lw;
-        ctorCtx.setLineDash([6 / ctor.scale, 4 / ctor.scale]);
-        if (ctor.lineStart) {
-          ctorCtx.beginPath();
-          ctorCtx.moveTo(ctor.lineStart.x + 0.5, ctor.lineStart.y + 0.5);
-          ctorCtx.lineTo(ctor.cursorX + 0.5, ctor.cursorY + 0.5);
-          ctorCtx.stroke();
-          ctorCtx.setLineDash([]);
-          if (ctor.shape === 'square') {
-            ctorCtx.fillRect(ctor.lineStart.x - lw / 2, ctor.lineStart.y - lw / 2, lw, lw);
-          } else {
-            ctorCtx.beginPath();
-            ctorCtx.arc(ctor.lineStart.x + 0.5, ctor.lineStart.y + 0.5, Math.max(1, lw / 2), 0, Math.PI * 2);
-            ctorCtx.fill();
-          }
-        } else {
-          ctorCtx.setLineDash([]);
-          ctorCtx.lineWidth = 1.5 / ctor.scale;
-          if (ctor.shape === 'square') {
-            ctorCtx.strokeRect(ctor.cursorX - lw / 2, ctor.cursorY - lw / 2, lw, lw);
-          } else {
-            ctorCtx.beginPath();
-            ctorCtx.arc(ctor.cursorX + 0.5, ctor.cursorY + 0.5, Math.max(2, lw / 2), 0, Math.PI * 2);
-            ctorCtx.stroke();
-          }
-        }
-      }
-    } else {
-      const s = Math.max(1, ctor.brush | 0);
-      const r = Math.max(0.5, s / 2);
-      ctorCtx.lineWidth = 1.5 / ctor.scale;
-      ctorCtx.setLineDash([4 / ctor.scale, 3 / ctor.scale]);
-      if (ctor.tool === 'erase') {
-        ctorCtx.strokeStyle = 'rgba(239,68,68,0.85)';
-        ctorCtx.fillStyle = 'rgba(239,68,68,0.12)';
-      } else {
-        ctorCtx.strokeStyle = 'rgba(59,130,246,0.9)';
-        ctorCtx.fillStyle = 'rgba(59,130,246,0.12)';
-      }
-      if (ctor.shape === 'square') {
-        ctorCtx.fillRect(ctor.cursorX - s / 2, ctor.cursorY - s / 2, s, s);
-        ctorCtx.strokeRect(ctor.cursorX - s / 2, ctor.cursorY - s / 2, s, s);
-      } else {
-        ctorCtx.beginPath();
-        ctorCtx.arc(ctor.cursorX + 0.5, ctor.cursorY + 0.5, r, 0, Math.PI * 2);
-        ctorCtx.fill();
-        ctorCtx.stroke();
-      }
-    }
-    ctorCtx.setLineDash([]);
-    ctorCtx.restore();
-  }
-  ctorCtx.restore();
-}
-
-function ctorPos(e) {
-  return screenToCtorWorld(ctorCanvas, ctor, e, CANVAS_MM);
-}
-
-function bgColorAt(px, py) {
-  return whiteBg();
-}
-
-function pushUndo() {
-  pushPaintUndo(ctor, CANVAS_MM);
-}
-
-function undoCtor() {
-  undoPaint(ctor, CANVAS_MM, drawCtor);
-}
-
-function redoCtor() {
-  redoPaint(ctor, CANVAS_MM, drawCtor);
-}
-
-function stampAt(ctx, x, y, width, shape, color, erase, maxW, maxH, bgFn) {
-  _stampAt(ctx, x, y, width, shape, color, erase, maxW, maxH, bgFn);
-}
-
-function strokeLineOnBuf(ctx, x0, y0, x1, y1, color, width, shape, erase, maxW, maxH, bgFn) {
-  _strokeLineOnBuf(ctx, x0, y0, x1, y1, color, width, shape, erase, maxW, maxH, bgFn);
-}
-
-function paintAt(x, y) {
-  _paintAtShared(ctor, x, y, CANVAS_MM, bgColorAt);
-}
-
-function pickColor(x, y) {
-  const { hex, nearWhite } = pickColorAt(ctor.bufCtx, x, y);
-  if (nearWhite) {
-    ctor.tool = 'erase';
-  } else {
-    ctor.tool = 'paint';
-    ctor.color = hex;
-    document.getElementById('activeColorSwatch').style.background = hex;
-  }
-  document.querySelectorAll('#ctorToolsSide button').forEach(b => {
-    if (b.dataset.ctor === 'picker' || b.dataset.ctor === 'clear') return;
-    const match = b.dataset.ctor === 'paint' && b.dataset.color && b.dataset.color.toLowerCase() === hex.toLowerCase();
-    const isErase = b.dataset.ctor === 'erase' && ctor.tool === 'erase';
-    b.classList.toggle('active-tool', match || isErase);
+  _openConstructorTab(ctor, ctorCanvas, ctorCtx, {
+    setGridLock: (v) => setGridLock(v),
+    logUI
   });
 }
+function closeConstructorTab() { _closeConstructorTab(ctorCanvas); }
+function ctorPos(e) { return _ctorPos(ctorCanvas, ctor, e); }
+function pushUndo() { _pushUndo(ctor); }
+function undoCtor() { _undoCtor(ctor, drawCtor); }
+function redoCtor() { _redoCtor(ctor, drawCtor); }
+function paintAt(x, y) { _paintAtTile(ctor, x, y); }
+function bufferToCustomDef(name, points) { return _bufferToCustomDef(ctor, name, points); }
 
-ctorCanvas.addEventListener('mousedown', e => {
-  if (e.button === 1 && e.shiftKey) {
-    e.preventDefault();
-    ctor.panning = true;
-    ctor.lastX = e.clientX;
-    ctor.lastY = e.clientY;
-    ctorCanvas.style.cursor = 'grabbing';
-    return;
-  }
-  if (e.button === 1) {
-    e.preventDefault();
-    const p = ctorPos(e);
-    pickColor(p.x, p.y);
-    return;
-  }
-  if (e.button !== 0) return;
-  const p = ctorPos(e);
-  ctor.cursorX = p.x; ctor.cursorY = p.y;
-  if (ctor.tool === 'picker') { pickColor(p.x, p.y); return; }
-  if (ctor.tool === 'line' || ctor.tool === 'measure') {
-    if (!ctor.lineStart) {
-      ctor.lineStart = { x: p.x, y: p.y };
-      drawCtor();
-      return;
-    }
-    if (ctor.tool === 'measure') {
-      const dist = Math.hypot(p.x - ctor.lineStart.x, p.y - ctor.lineStart.y);
-      logUI({ t: 0, msg: `Medição (ladrilho): ${dist.toFixed(1)} mm`, category: 'info' });
-      ctor.lineStart = null;
-      drawCtor();
-      return;
-    }
-    pushUndo();
-    strokeLineOnBuf(ctor.bufCtx, ctor.lineStart.x, ctor.lineStart.y, p.x, p.y, ctor.color, ctor.brush, ctor.shape, false, CANVAS_MM, CANVAS_MM, bgColorAt);
-    ctor.lineStart = null;
-    drawCtor();
-    return;
-  }
-  pushUndo();
-  ctor.strokeSaved = true;
-  ctor.painting = true;
-  paintAt(p.x, p.y);
-  drawCtor();
-});
-ctorCanvas.addEventListener('mousemove', e => {
-  if (ctor.panning) {
-    ctor.ox += e.clientX - ctor.lastX;
-    ctor.oy += e.clientY - ctor.lastY;
-    ctor.lastX = e.clientX;
-    ctor.lastY = e.clientY;
-    drawCtor();
-    return;
-  }
-  const p = ctorPos(e);
-  ctor.cursorX = p.x;
-  ctor.cursorY = p.y;
-  if (ctor.painting) {
-    paintAt(p.x, p.y);
-  }
-  drawCtor();
-});
-ctorCanvas.addEventListener('mouseleave', () => {
-  ctor.cursorX = null;
-  ctor.cursorY = null;
-  drawCtor();
-});
-window.addEventListener('mouseup', () => {
-  ctor.painting = false;
-  ctor.strokeSaved = false;
-  if (ctor.panning) {
-    ctor.panning = false;
-    ctorCanvas.style.cursor = 'crosshair';
-  }
-});
-ctorCanvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  setCtorZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12);
-}, { passive: false });
-ctorCanvas.addEventListener('contextmenu', e => e.preventDefault());
-
-/** Export only center 300×300 as tile bitmap; zones/objects may extend from full 900 */
-function bufferToCustomDef(name, points) {
-  // crop center tile for display bitmap
-  const tileC = document.createElement('canvas');
-  tileC.width = CELL_MM;
-  tileC.height = CELL_MM;
-  const tctx = tileC.getContext('2d');
-  tctx.drawImage(ctor.buf, CELL_MM, CELL_MM, CELL_MM, CELL_MM, 0, 0, CELL_MM, CELL_MM);
-  const dataURL = tileC.toDataURL('image/png');
-
-  // full 900 canvas for zone detection in neighbor cells (coords relative to center tile: -1..2)
-  const img = ctor.bufCtx.getImageData(0, 0, CANVAS_MM, CANVAS_MM);
-  const data = img.data;
-  const objects = [];
-  const zones = [];
-  const step = Math.max(5, ctor.gridLock || 10);
-
-  for (let y = 0; y < CANVAS_MM; y += step) {
-    for (let x = 0; x < CANVAS_MM; x += step) {
-      const i = (y * CANVAS_MM + x) * 4;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      // normalize relative to center tile origin
-      const nx = (x - CELL_MM) / CELL_MM;
-      const ny = (y - CELL_MM) / CELL_MM;
-      const w = step / CELL_MM, h = step / CELL_MM;
-      if (r > 200 && g > 80 && g < 160 && b < 80) {
-        objects.push({ type: 'obstacle', x: nx, y: ny, w, h });
-      } else if (r > 140 && r < 200 && g < 120 && b > 180) {
-        objects.push({ type: 'gap', x: nx, y: ny, w, h });
-      } else if (g > 150 && r < 100 && b < 120) {
-        objects.push({ type: 'green', x: nx, y: ny, w, h });
-      } else if (b > 180 && r < 100 && g < 160) {
-        zones.push({ x: nx, y: ny, w, h });
-      }
-    }
-  }
-
-  return {
-    name, points, pixel: true, sizeMm: CELL_MM,
-    bitmap: dataURL,
-    // also store full context for advanced use
-    fullBitmap: ctor.buf.toDataURL('image/png'),
-    objects, zones, lines: []
-  };
-}
+// canvas + UI wiring deferred until setGridLock exists (below)
 
 // ─── Bindings ────────────────────────────────────────────────
 document.querySelectorAll('.mode-tabs button').forEach(btn => {
@@ -1250,98 +849,6 @@ document.getElementById('btnDrop').onclick = () => {
   draw();
 };
 
-function setCtorColor(hex) {
-  if (!hex) return;
-  if (hex[0] !== '#') hex = '#' + hex;
-  ctor.color = hex;
-  const sw = document.getElementById('activeColorSwatch');
-  if (sw) sw.style.background = hex;
-  const pick = document.getElementById('ctorColorPicker');
-  if (pick) pick.value = hex;
-  const hx = document.getElementById('ctorColorHex');
-  if (hx) hx.value = hex;
-  document.querySelectorAll('#ctorColorPalette .color-swatch').forEach(b => {
-    b.classList.toggle('active-tool', b.dataset.color.toLowerCase() === hex.toLowerCase());
-    b.style.borderColor = b.dataset.color.toLowerCase() === hex.toLowerCase() ? '#fff' : 'transparent';
-  });
-}
-
-document.querySelectorAll('#ctorToolsSide button').forEach(btn => {
-  btn.onclick = () => {
-    const t = btn.dataset.ctor;
-    if (t === 'clear') {
-      if (!confirm('Limpar todo o canvas 3×3?')) return;
-      pushUndo();
-      clearCtorBuffer();
-      drawCtor();
-      return;
-    }
-    document.querySelectorAll('#ctorToolsSide button').forEach(b => b.classList.remove('active-tool'));
-    btn.classList.add('active-tool');
-    // Se “pintar usando linha” estiver marcado e a ferramenta for pincel, usa tool=line
-    if (t === 'paint' && document.getElementById('ctorPaintAsLine')?.checked) {
-      ctor.tool = 'line';
-    } else {
-      ctor.tool = t;
-    }
-    ctor.lineStart = null;
-    if (t === 'erase') {
-      document.getElementById('activeColorSwatch').style.background = '#ffffff';
-    } else if (t === 'paint') {
-      document.getElementById('activeColorSwatch').style.background = ctor.color || '#000000';
-    }
-    drawCtor();
-  };
-});
-
-// Paleta de cores padrão OBR + RGB livre
-document.querySelectorAll('#ctorColorPalette .color-swatch').forEach(btn => {
-  btn.onclick = () => {
-    setCtorColor(btn.dataset.color);
-    // volta para pincel se estava em outra ferramenta
-    if (ctor.tool === 'erase' || ctor.tool === 'picker' || ctor.tool === 'measure') {
-      ctor.tool = document.getElementById('ctorPaintAsLine')?.checked ? 'line' : 'paint';
-      document.querySelectorAll('#ctorToolsSide button').forEach(b => {
-        b.classList.toggle('active-tool', b.dataset.ctor === 'paint');
-      });
-    }
-    drawCtor();
-  };
-});
-const ctorColorPicker = document.getElementById('ctorColorPicker');
-if (ctorColorPicker) {
-  ctorColorPicker.oninput = e => setCtorColor(e.target.value);
-}
-const ctorColorHex = document.getElementById('ctorColorHex');
-if (ctorColorHex) {
-  ctorColorHex.onchange = e => {
-    let v = e.target.value.trim();
-    if (/^#?[0-9a-fA-F]{6}$/.test(v)) setCtorColor(v.startsWith('#') ? v : '#' + v);
-  };
-}
-const ctorPaintAsLine = document.getElementById('ctorPaintAsLine');
-if (ctorPaintAsLine) {
-  ctorPaintAsLine.onchange = () => {
-    if (ctor.tool === 'paint' || ctor.tool === 'line') {
-      ctor.tool = ctorPaintAsLine.checked ? 'line' : 'paint';
-      ctor.lineStart = null;
-      drawCtor();
-    }
-  };
-}
-function setBrushSize(v) {
-  v = Math.max(1, Math.min(300, parseInt(v) || 1));
-  ctor.brush = v;
-  document.getElementById('brushSize').value = v;
-  document.getElementById('brushSizeNum').value = v;
-  document.getElementById('brushSizeLabel').textContent = v + ' mm';
-}
-document.getElementById('brushSize').oninput = e => setBrushSize(e.target.value);
-document.getElementById('brushSizeNum').onchange = e => setBrushSize(e.target.value);
-document.getElementById('brushSizeNum').oninput = e => {
-  const v = parseInt(e.target.value);
-  if (!isNaN(v) && v >= 1 && v <= 300) setBrushSize(v);
-};
 function setGridLock(v) {
   v = Math.max(1, Math.min(50, parseInt(v) || 1));
   ctor.gridLock = v;
@@ -1353,40 +860,17 @@ function setGridLock(v) {
   if (lab) lab.textContent = v + ' mm';
   drawCtor();
 }
-document.getElementById('gridLock').oninput = e => setGridLock(e.target.value);
-document.getElementById('gridLockNum').oninput = e => {
-  const v = parseInt(e.target.value);
-  if (!isNaN(v) && v >= 1 && v <= 50) setGridLock(v);
-};
-document.getElementById('gridLockNum').onchange = e => setGridLock(e.target.value);
-document.getElementById('brushRound').onclick = () => {
-  ctor.shape = 'round';
-  document.getElementById('brushRound').classList.add('active-tool');
-  document.getElementById('brushSquare').classList.remove('active-tool');
-};
-document.getElementById('brushSquare').onclick = () => {
-  ctor.shape = 'square';
-  document.getElementById('brushSquare').classList.add('active-tool');
-  document.getElementById('brushRound').classList.remove('active-tool');
-};
-document.getElementById('btnCtorSave').onclick = () => {
-  const name = document.getElementById('ctorName').value || 'Meu Ladrilho';
-  const rawPts = parseInt(document.getElementById('ctorPoints').value, 10);
-  const points = Number.isFinite(rawPts) ? rawPts : 10;
-  if (!ctor.buf) { alert('Editor não inicializado.'); return; }
-  const def = bufferToCustomDef(name, points);
-  if (ctor.editingIndex != null && ctor.editingIndex >= 0 && ctor.editingIndex < sim.customLibrary.length) {
-    // Atualiza ladrilho existente
-    sim.customLibrary[ctor.editingIndex] = def;
-    logUI({ t: 0, msg: `Ladrilho "${name}" atualizado na biblioteca.`, category: 'success' });
-    ctor.editingIndex = null;
-  } else {
-    sim.customLibrary.push(def);
-    logUI({ t: 0, msg: `Ladrilho "${name}" salvo (300×300 mm pixel + contexto 3×3).`, category: 'success' });
-  }
-  persist('obr_custom_tiles', sim.customLibrary);
-  refreshCustomSelect();
-};
+
+wireTileCtorCanvas(ctor, ctorCanvas, { drawCtor, logUI });
+wireTileCtorUI(ctor, sim, {
+  drawCtor,
+  logUI,
+  persist,
+  refreshCustomSelect,
+  setCtorZoom,
+  fitCtorCanvas
+});
+
 
 // Teclado e resize (js/app/Keyboard.js + GameLoop.js) — wiring após defs de undo/rotate
 function wireEditorCanvas() {
@@ -1451,448 +935,27 @@ function loop() {
 }
 
 
-// ─── Object Constructor (300×300, só pincel/cores) ────────────
-const OBJ_MM = CTOR_SIZE_MM;
-const objCtor = {
-  tool: 'paint', color: '#000000', brush: 20, shape: 'round', gridLock: 10,
-  painting: false, buf: null, bufCtx: null,
-  scale: 1, ox: 0, oy: 0, panning: false, lastX: 0, lastY: 0,
-  undoStack: [], redoStack: [], maxHistory: CTOR_HISTORY_MAX,
-  cursorX: null, cursorY: null,
-  lineStart: null
-};
+// ─── Object Constructor (js/constructors/ObjectConstructor.js) ──
+const OBJ_MM = _OBJ_MM;
+const objCtor = createObjCtorState();
 const objCtorCanvas = document.getElementById('objCtorCanvas');
 const objCtorCtx = objCtorCanvas ? objCtorCanvas.getContext('2d') : null;
 
-function initObjBuf() {
-  initPaintBuffer(objCtor, OBJ_MM);
-}
-
-function openObjConstructorTab() {
-  try {
-    if (!objCtorCanvas) return;
-    if (!objCtor.buf) initObjBuf();
-    document.getElementById('arena')?.classList.add('hidden');
-    document.getElementById('arenaZoomBar')?.classList.add('hidden');
-    document.getElementById('ctorCanvas')?.classList.add('hidden');
-    document.getElementById('ctorZoomBar')?.classList.add('hidden');
-    document.getElementById('robotCtorCanvas')?.classList.add('hidden');
-    document.getElementById('robotCtorZoomBar')?.classList.add('hidden');
-    objCtorCanvas.classList.remove('hidden');
-    document.getElementById('objCtorZoomBar')?.classList.remove('hidden');
-    const gl = document.getElementById('objGridLock');
-    if (gl) objCtor.gridLock = parseInt(gl.value) || 1;
-    fitObjCtorCanvas();
-    drawObjCtor();
-  } catch (err) {
-    console.error('openObjConstructorTab:', err);
-  }
-}
-
-function closeObjConstructorTab() {
-  if (objCtorCanvas) objCtorCanvas.classList.add('hidden');
-  document.getElementById('objCtorZoomBar')?.classList.add('hidden');
-}
-
-function fitObjCtorCanvas() {
-  fitCtorCamera(objCtorCanvas, objCtorCtx, objCtor, OBJ_MM, { pad: 24, maxFit: 3 });
-}
-
-function setObjCtorZoom(factor) {
-  _setCtorZoomCam(objCtorCanvas, objCtor, factor, { min: 0.08, max: 5 });
-  drawObjCtor();
-}
-
-function drawObjCtor() {
-  if (!objCtor.buf || !objCtorCtx) return;
-  const cssW = objCtorCanvas.clientWidth, cssH = objCtorCanvas.clientHeight;
-  objCtorCtx.save();
-  objCtorCtx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-  objCtorCtx.fillStyle = '#0b1220';
-  objCtorCtx.fillRect(0, 0, cssW, cssH);
-  objCtorCtx.translate(objCtor.ox, objCtor.oy);
-  objCtorCtx.scale(objCtor.scale, objCtor.scale);
-  objCtorCtx.imageSmoothingEnabled = false;
-  objCtorCtx.drawImage(objCtor.buf, 0, 0);
-  objCtorCtx.strokeStyle = '#64748b';
-  objCtorCtx.lineWidth = 2 / objCtor.scale;
-  objCtorCtx.strokeRect(0, 0, OBJ_MM, OBJ_MM);
-  // center cross red
-  objCtorCtx.strokeStyle = 'rgba(239,68,68,0.45)';
-  objCtorCtx.lineWidth = 1 / objCtor.scale;
-  objCtorCtx.beginPath();
-  objCtorCtx.moveTo(0, OBJ_MM / 2); objCtorCtx.lineTo(OBJ_MM, OBJ_MM / 2);
-  objCtorCtx.moveTo(OBJ_MM / 2, 0); objCtorCtx.lineTo(OBJ_MM / 2, OBJ_MM);
-  objCtorCtx.stroke();
-  // grid lock
-  if (objCtor.gridLock > 1) {
-    objCtorCtx.strokeStyle = 'rgba(59,130,246,0.12)';
-    for (let i = 0; i <= OBJ_MM; i += objCtor.gridLock) {
-      objCtorCtx.beginPath(); objCtorCtx.moveTo(i, 0); objCtorCtx.lineTo(i, OBJ_MM); objCtorCtx.stroke();
-      objCtorCtx.beginPath(); objCtorCtx.moveTo(0, i); objCtorCtx.lineTo(OBJ_MM, i); objCtorCtx.stroke();
-    }
-  }
-  // brush / line preview
-  if (objCtor.cursorX != null && !objCtor.panning) {
-    if (objCtor.tool === 'line' || objCtor.tool === 'measure') {
-      const lw = Math.max(1, objCtor.brush | 0);
-      if (objCtor.tool === 'measure') {
-        objCtorCtx.lineWidth = 1.5 / objCtor.scale;
-        objCtorCtx.strokeStyle = 'rgba(234,179,8,0.95)';
-        objCtorCtx.setLineDash([6 / objCtor.scale, 4 / objCtor.scale]);
-        if (objCtor.lineStart) {
-          objCtorCtx.beginPath();
-          objCtorCtx.moveTo(objCtor.lineStart.x, objCtor.lineStart.y);
-          objCtorCtx.lineTo(objCtor.cursorX, objCtor.cursorY);
-          objCtorCtx.stroke();
-          const dist = Math.hypot(objCtor.cursorX - objCtor.lineStart.x, objCtor.cursorY - objCtor.lineStart.y);
-          objCtorCtx.setLineDash([]);
-          objCtorCtx.fillStyle = '#fbbf24';
-          objCtorCtx.font = `${13 / objCtor.scale}px sans-serif`;
-          objCtorCtx.textAlign = 'center';
-          objCtorCtx.fillText(dist.toFixed(1) + ' mm', (objCtor.lineStart.x + objCtor.cursorX) / 2, (objCtor.lineStart.y + objCtor.cursorY) / 2 - 8 / objCtor.scale);
-        }
-      } else {
-        objCtorCtx.lineCap = objCtor.shape === 'square' ? 'square' : 'round';
-        objCtorCtx.lineWidth = lw;
-        objCtorCtx.strokeStyle = 'rgba(59,130,246,0.7)';
-        objCtorCtx.setLineDash([6 / objCtor.scale, 4 / objCtor.scale]);
-        if (objCtor.lineStart) {
-          objCtorCtx.beginPath();
-          objCtorCtx.moveTo(objCtor.lineStart.x + 0.5, objCtor.lineStart.y + 0.5);
-          objCtorCtx.lineTo(objCtor.cursorX + 0.5, objCtor.cursorY + 0.5);
-          objCtorCtx.stroke();
-          objCtorCtx.setLineDash([]);
-          objCtorCtx.fillStyle = 'rgba(59,130,246,0.35)';
-          if (objCtor.shape === 'square')
-            objCtorCtx.fillRect(objCtor.lineStart.x - lw / 2, objCtor.lineStart.y - lw / 2, lw, lw);
-          else {
-            objCtorCtx.beginPath();
-            objCtorCtx.arc(objCtor.lineStart.x + 0.5, objCtor.lineStart.y + 0.5, Math.max(1, lw / 2), 0, Math.PI * 2);
-            objCtorCtx.fill();
-          }
-        } else {
-          objCtorCtx.setLineDash([]);
-          objCtorCtx.lineWidth = 1.5 / objCtor.scale;
-          if (objCtor.shape === 'square')
-            objCtorCtx.strokeRect(objCtor.cursorX - lw / 2, objCtor.cursorY - lw / 2, lw, lw);
-          else {
-            objCtorCtx.beginPath();
-            objCtorCtx.arc(objCtor.cursorX + 0.5, objCtor.cursorY + 0.5, Math.max(2, lw / 2), 0, Math.PI * 2);
-            objCtorCtx.stroke();
-          }
-        }
-      }
-    } else {
-      const s = Math.max(1, objCtor.brush | 0), r = Math.max(0.5, s / 2);
-      objCtorCtx.lineWidth = 1.5 / objCtor.scale;
-      objCtorCtx.setLineDash([4 / objCtor.scale, 3 / objCtor.scale]);
-      objCtorCtx.strokeStyle = objCtor.tool === 'erase' ? 'rgba(239,68,68,0.85)' : 'rgba(59,130,246,0.9)';
-      objCtorCtx.fillStyle = objCtor.tool === 'erase' ? 'rgba(239,68,68,0.12)' : 'rgba(59,130,246,0.12)';
-      if (objCtor.shape === 'square') {
-        objCtorCtx.fillRect(objCtor.cursorX - s / 2, objCtor.cursorY - s / 2, s, s);
-        objCtorCtx.strokeRect(objCtor.cursorX - s / 2, objCtor.cursorY - s / 2, s, s);
-      } else {
-        objCtorCtx.beginPath();
-        objCtorCtx.arc(objCtor.cursorX + 0.5, objCtor.cursorY + 0.5, r, 0, Math.PI * 2);
-        objCtorCtx.fill(); objCtorCtx.stroke();
-      }
-      objCtorCtx.setLineDash([]);
-    }
-  }
-  objCtorCtx.restore();
-}
-
-function objCtorPos(e) {
-  return screenToCtorWorld(objCtorCanvas, objCtor, e, OBJ_MM);
-}
-
-function pushObjUndo() {
-  pushPaintUndo(objCtor, OBJ_MM);
-}
-function undoObjCtor() {
-  undoPaint(objCtor, OBJ_MM, drawObjCtor);
-}
-function redoObjCtor() {
-  redoPaint(objCtor, OBJ_MM, drawObjCtor);
-}
-
-function paintObjAt(x, y) {
-  _paintAtShared(objCtor, x, y, OBJ_MM, whiteBg);
-}
-
-if (objCtorCanvas) {
-  objCtorCanvas.addEventListener('mousedown', e => {
-    if (e.button === 1 && e.shiftKey) {
-      e.preventDefault();
-      objCtor.panning = true;
-      objCtor.lastX = e.clientX; objCtor.lastY = e.clientY;
-      return;
-    }
-    if (e.button === 1) {
-      e.preventDefault();
-      const p = objCtorPos(e);
-      const d = objCtor.bufCtx.getImageData(Math.floor(p.x), Math.floor(p.y), 1, 1).data;
-      const hex = '#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join('');
-      if (d[0] > 240 && d[1] > 240 && d[2] > 240) objCtor.tool = 'erase';
-      else { objCtor.tool = 'paint'; objCtor.color = hex; document.getElementById('objActiveColor').style.background = hex; }
-      return;
-    }
-    if (e.button !== 0) return;
-    const p = objCtorPos(e);
-    objCtor.cursorX = p.x; objCtor.cursorY = p.y;
-    if (objCtor.tool === 'picker') return;
-    if (objCtor.tool === 'line' || objCtor.tool === 'measure') {
-      if (!objCtor.lineStart) {
-        objCtor.lineStart = { x: p.x, y: p.y };
-        drawObjCtor();
-        return;
-      }
-      if (objCtor.tool === 'measure') {
-        const dist = Math.hypot(p.x - objCtor.lineStart.x, p.y - objCtor.lineStart.y);
-        logUI({ t: 0, msg: `Medição (objeto): ${dist.toFixed(1)} mm`, category: 'info' });
-        objCtor.lineStart = null;
-        drawObjCtor();
-        return;
-      }
-      pushObjUndo();
-      strokeLineOnBuf(objCtor.bufCtx, objCtor.lineStart.x, objCtor.lineStart.y, p.x, p.y, objCtor.color, objCtor.brush, objCtor.shape, false, OBJ_MM, OBJ_MM, () => [255, 255, 255, 255]);
-      objCtor.lineStart = null;
-      drawObjCtor();
-      return;
-    }
-    pushObjUndo();
-    objCtor.painting = true;
-    paintObjAt(p.x, p.y);
-    drawObjCtor();
-  });
-  objCtorCanvas.addEventListener('mousemove', e => {
-    if (objCtor.panning) {
-      objCtor.ox += e.clientX - objCtor.lastX;
-      objCtor.oy += e.clientY - objCtor.lastY;
-      objCtor.lastX = e.clientX; objCtor.lastY = e.clientY;
-      drawObjCtor(); return;
-    }
-    const p = objCtorPos(e);
-    objCtor.cursorX = p.x; objCtor.cursorY = p.y;
-    if (objCtor.painting) paintObjAt(p.x, p.y);
-    drawObjCtor();
-  });
-  objCtorCanvas.addEventListener('mouseleave', () => { objCtor.cursorX = null; objCtor.cursorY = null; drawObjCtor(); });
-  objCtorCanvas.addEventListener('wheel', e => { e.preventDefault(); setObjCtorZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
-  objCtorCanvas.addEventListener('contextmenu', e => e.preventDefault());
-}
-window.addEventListener('mouseup', () => {
-  objCtor.painting = false;
-  objCtor.panning = false;
-});
-
+function initObjBuf() { _initObjBuf(objCtor); }
+function fitObjCtorCanvas() { _fitObjCtorCanvas(objCtorCanvas, objCtorCtx, objCtor); }
+function setObjCtorZoom(factor) { _setObjCtorZoom(objCtorCanvas, objCtor, factor, drawObjCtor); }
+function drawObjCtor() { _drawObjCtor(objCtorCanvas, objCtorCtx, objCtor); }
+function openObjConstructorTab() { _openObjConstructorTab(objCtor, objCtorCanvas, objCtorCtx); }
+function closeObjConstructorTab() { _closeObjConstructorTab(objCtorCanvas); }
+function objCtorPos(e) { return _objCtorPos(objCtorCanvas, objCtor, e); }
+function pushObjUndo() { _pushObjUndo(objCtor); }
+function undoObjCtor() { _undoObjCtor(objCtor, drawObjCtor); }
+function redoObjCtor() { _redoObjCtor(objCtor, drawObjCtor); }
+function paintObjAt(x, y) { _paintObjAt(objCtor, x, y); }
 function refreshObjLibrary() {
-  const sel = document.getElementById('customObjSelect');
-  if (sel) {
-    sel.innerHTML = '<option value="">— obj custom —</option>';
-    sim.customObjLibrary.forEach((c, i) => {
-      const o = document.createElement('option');
-      const pts = (c.points != null && Number.isFinite(Number(c.points))) ? Number(c.points) : 0;
-      o.value = i; o.textContent = `${c.name} (${pts}pts)`;
-      sel.appendChild(o);
-    });
-  }
-  // Paleta visual de objetos custom (mesmo funcionamento do seletor de ladrilhos)
-  const palette = document.getElementById('objectPalette');
-  if (palette) {
-    if (!sim.customObjLibrary.length) {
-      palette.innerHTML = '<span style="font-size:0.7rem;color:var(--muted)">Nenhum objeto custom ainda.</span>';
-    } else {
-      palette.innerHTML = '';
-      sim.customObjLibrary.forEach((c, i) => {
-        const btn = document.createElement('button');
-        btn.title = `${c.name} (${(c.points != null && Number.isFinite(Number(c.points))) ? Number(c.points) : 0} pts)`;
-        btn.style.cssText = 'position:relative;width:48px;height:48px;padding:2px;overflow:hidden';
-        if (c.bitmap) {
-          const img = document.createElement('img');
-          img.src = c.bitmap;
-          img.style.cssText = 'width:100%;height:100%;object-fit:contain;image-rendering:pixelated';
-          btn.appendChild(img);
-        } else {
-          btn.textContent = c.name.slice(0, 4);
-        }
-        btn.onclick = () => {
-          document.querySelectorAll('#objectTools button, #objectPalette button').forEach(b => b.classList.remove('active-tool'));
-          btn.classList.add('active-tool');
-          sim.objectTool = 'custom';
-          sim.placingCustomObjId = i;
-          sim.selectedTool = null;
-          sim.markerTool = null;
-          if (sel) sel.value = String(i);
-        };
-        palette.appendChild(btn);
-      });
-    }
-  }
-  const lib = document.getElementById('customObjLibrary');
-  if (lib) {
-    if (!sim.customObjLibrary.length) lib.textContent = 'Nenhum ainda.';
-    else lib.innerHTML = sim.customObjLibrary.map((c, i) => {
-      const pts = (c.points != null && Number.isFinite(Number(c.points))) ? Number(c.points) : 0;
-      return `<div class="lib-item"><span><strong>${c.name}</strong> — ${pts}pts</span>
-        <button data-odel="${i}" class="danger">Excluir</button></div>`;
-    }).join('');
-    lib.querySelectorAll('button[data-odel]').forEach(btn => {
-      btn.onclick = () => {
-        const i = parseInt(btn.dataset.odel);
-        if (confirm(`Excluir "${sim.customObjLibrary[i].name}"?`)) {
-          sim.customObjLibrary.splice(i, 1);
-          persist('obr_custom_objects', sim.customObjLibrary);
-          refreshObjLibrary();
-        }
-      };
-    });
-  }
+  _refreshObjLibrary(sim, { persist });
 }
 
-// bindings object constructor UI
-document.querySelectorAll('#objCtorTools button').forEach(btn => {
-  btn.onclick = () => {
-    const t = btn.dataset.oct;
-    if (t === 'clear') {
-      if (!confirm('Limpar objeto?')) return;
-      pushObjUndo();
-      objCtor.bufCtx.fillStyle = '#ffffff';
-      objCtor.bufCtx.fillRect(0, 0, OBJ_MM, OBJ_MM);
-      objCtor.redoStack = [];
-      drawObjCtor();
-      return;
-    }
-    document.querySelectorAll('#objCtorTools button').forEach(b => b.classList.remove('active-tool'));
-    btn.classList.add('active-tool');
-    if (t === 'paint' && document.getElementById('objPaintAsLine')?.checked) {
-      objCtor.tool = 'line';
-    } else {
-      objCtor.tool = t;
-    }
-    objCtor.lineStart = null;
-    if (t === 'erase') {
-      document.getElementById('objActiveColor').style.background = '#ffffff';
-    } else if (t === 'paint') {
-      document.getElementById('objActiveColor').style.background = objCtor.color || '#000000';
-    }
-    drawObjCtor();
-  };
-});
-
-function setObjCtorColor(hex) {
-  if (!hex) return;
-  if (hex[0] !== '#') hex = '#' + hex;
-  objCtor.color = hex;
-  const sw = document.getElementById('objActiveColor');
-  if (sw) sw.style.background = hex;
-  const pick = document.getElementById('objColorPicker');
-  if (pick) pick.value = hex;
-  const hx = document.getElementById('objColorHex');
-  if (hx) hx.value = hex;
-  document.querySelectorAll('#objColorPalette .color-swatch').forEach(b => {
-    const on = b.dataset.color.toLowerCase() === hex.toLowerCase();
-    b.classList.toggle('active-tool', on);
-    b.style.borderColor = on ? '#fff' : 'transparent';
-  });
-}
-document.querySelectorAll('#objColorPalette .color-swatch').forEach(btn => {
-  btn.onclick = () => {
-    setObjCtorColor(btn.dataset.color);
-    if (objCtor.tool === 'erase' || objCtor.tool === 'picker' || objCtor.tool === 'measure') {
-      objCtor.tool = document.getElementById('objPaintAsLine')?.checked ? 'line' : 'paint';
-      document.querySelectorAll('#objCtorTools button').forEach(b => {
-        b.classList.toggle('active-tool', b.dataset.oct === 'paint');
-      });
-    }
-    drawObjCtor();
-  };
-});
-const objColorPickerEl = document.getElementById('objColorPicker');
-if (objColorPickerEl) objColorPickerEl.oninput = e => setObjCtorColor(e.target.value);
-const objColorHexEl = document.getElementById('objColorHex');
-if (objColorHexEl) {
-  objColorHexEl.onchange = e => {
-    let v = e.target.value.trim();
-    if (/^#?[0-9a-fA-F]{6}$/.test(v)) setObjCtorColor(v.startsWith('#') ? v : '#' + v);
-  };
-}
-const objPaintAsLineEl = document.getElementById('objPaintAsLine');
-if (objPaintAsLineEl) {
-  objPaintAsLineEl.onchange = () => {
-    if (objCtor.tool === 'paint' || objCtor.tool === 'line') {
-      objCtor.tool = objPaintAsLineEl.checked ? 'line' : 'paint';
-      objCtor.lineStart = null;
-      drawObjCtor();
-    }
-  };
-}
-function setObjBrush(v) {
-  v = Math.max(1, Math.min(300, parseInt(v) || 1));
-  objCtor.brush = v;
-  document.getElementById('objBrushSize').value = v;
-  document.getElementById('objBrushSizeNum').value = v;
-  document.getElementById('objBrushSizeLabel').textContent = v + ' mm';
-}
-document.getElementById('objBrushSize').oninput = e => setObjBrush(e.target.value);
-document.getElementById('objBrushSizeNum').oninput = e => {
-  const v = parseInt(e.target.value);
-  if (!isNaN(v) && v >= 1 && v <= 300) setObjBrush(v);
-};
-function setObjGridLock(v) {
-  v = Math.max(1, Math.min(50, parseInt(v) || 1));
-  objCtor.gridLock = v;
-  const sl = document.getElementById('objGridLock');
-  const num = document.getElementById('objGridLockNum');
-  const lab = document.getElementById('objGridLockLabel');
-  if (sl) sl.value = v;
-  if (num) num.value = v;
-  if (lab) lab.textContent = v + ' mm';
-  drawObjCtor();
-}
-document.getElementById('objGridLock').oninput = e => setObjGridLock(e.target.value);
-document.getElementById('objGridLockNum').oninput = e => {
-  const v = parseInt(e.target.value);
-  if (!isNaN(v) && v >= 1 && v <= 50) setObjGridLock(v);
-};
-document.getElementById('objGridLockNum').onchange = e => setObjGridLock(e.target.value);
-document.getElementById('objBrushRound').onclick = () => {
-  objCtor.shape = 'round';
-  document.getElementById('objBrushRound').classList.add('active-tool');
-  document.getElementById('objBrushSquare').classList.remove('active-tool');
-};
-document.getElementById('objBrushSquare').onclick = () => {
-  objCtor.shape = 'square';
-  document.getElementById('objBrushSquare').classList.add('active-tool');
-  document.getElementById('objBrushRound').classList.remove('active-tool');
-};
-document.getElementById('btnObjCtorSave').onclick = () => {
-  const name = document.getElementById('objCtorName').value || 'Meu Objeto';
-  const raw = parseInt(document.getElementById('objCtorPoints').value, 10);
-  const points = Number.isFinite(raw) ? raw : 0;
-  // Exporta com fundo branco → transparente (só o desenho aparece na arena)
-  const tmp = document.createElement('canvas');
-  tmp.width = OBJ_MM; tmp.height = OBJ_MM;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(objCtor.buf, 0, 0);
-  const img = tctx.getImageData(0, 0, OBJ_MM, OBJ_MM);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    // quase-branco vira transparente
-    if (d[i] > 245 && d[i + 1] > 245 && d[i + 2] > 245) d[i + 3] = 0;
-  }
-  tctx.putImageData(img, 0, 0);
-  const def = { name, points, pixel: true, sizeMm: OBJ_MM, bitmap: tmp.toDataURL('image/png') };
-  sim.customObjLibrary.push(def);
-  persist('obr_custom_objects', sim.customObjLibrary);
-  refreshObjLibrary();
-  logUI({ t: 0, msg: `Objeto "${name}" salvo (${points} pts).`, category: 'success' });
-};
-
-// (Ctrl+Z/Y para objconstructor já coberto no handler global de keydown)
-
-// load objects library + arena objects (síncrono localStorage; reforçado no bootstrap async)
 try {
   const o = localStorage.getItem('obr_custom_objects');
   if (o) sim.customObjLibrary = JSON.parse(o);
@@ -1903,6 +966,15 @@ try {
 } catch (e) {}
 refreshObjLibrary();
 
+wireObjCtorCanvas(objCtor, objCtorCanvas, { drawObjCtor, logUI });
+wireObjCtorUI(objCtor, sim, {
+  drawObjCtor,
+  logUI,
+  persist,
+  refreshObjLibrary,
+  setObjCtorZoom,
+  fitObjCtorCanvas
+});
 
 // ═══════════════════════════════════════════════════════════════
 // Construtor de robô + sensores + script
