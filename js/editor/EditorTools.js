@@ -77,7 +77,8 @@ export function selectOfficialTile(sim, file) {
   sim.markerTool = null;
   document.querySelectorAll('#tileTools button').forEach(b => b.classList.remove('active-tool'));
   document.querySelectorAll('#officialTileTools button').forEach(b => {
-    b.classList.toggle('active-tool', b.dataset.file === file);
+    // botões usam data-official (ver OfficialCatalog.js)
+    b.classList.toggle('active-tool', b.dataset.official === file);
   });
   document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => {
     b.classList.remove('active-tool');

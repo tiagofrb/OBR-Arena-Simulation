@@ -120,21 +120,20 @@ Não muda comportamento. Reduz ruído para as fases seguintes.
 
 **Critério de pronto:** trocar de aba 1–6 e atalhos funcionam; `main.js` não registra esses listeners direto — só chama `wireAppShell()` / `startGameLoop`.
 
-### Fase 2 — Completar o editor (o que ainda ficou no `main`)
+### Fase 2 — Completar o editor ✅
 
-Lógica de tile já saiu; **UI e I/O** não.
+| Módulo | Conteúdo |
+|--------|----------|
+| `editor/TilePalette.js` | preview + paleta custom (drag, delete, hover) |
+| `editor/OfficialCatalog.js` | probe, load, render, ensure da paleta oficial |
+| `editor/EditorInput.js` | clique, pan, picker, context menu, wheel, medida |
+| `editor/ArenaIO.js` | download/export/import, save, pathfinding scheduler, medida UI |
+| `editor/CustomMode.js` | mirror UI, objetos custom, export hint, `applyCustomMode` |
 
-| Módulo | Trecho aproximado hoje | Conteúdo |
-|--------|------------------------|----------|
-| `editor/TilePalette.js` | ~766–1011, preview hover | paleta builtin/custom, preview canvas |
-| `editor/OfficialCatalog.js` | ~2064–2153 | catálogo, probe de imagem, paleta oficial |
-| `editor/EditorInput.js` | ~1096–1422 | clique, arraste, pan, picker, medição |
-| `editor/ArenaIO.js` | ~2262–2460 + import | download JSON, export oficial/app, import, `schedulePathfinding` |
-| `editor/CustomMode.js` | ~3830–3927, `updateMirrorUI`, `updateCustomObjectUI`, `updateExportHint` | modo custom persistido e bloqueios |
+Wrappers finos permanecem no `main` para deps; `BUILTIN_TILE_DEFS` (morto) removido.
+`wireTileContextMenu` permanece no `main` (já delega a `TileProps.js`).
 
-`wireTileContextMenu` (~4025+) permanece fino no `main` ou vai para `TileProps.js` se ainda estiver no `main`.
-
-**Critério de pronto:** editar arena (paleta, mouse, import/export, modo custom) sem essas funções definidas no `main`.
+**Critério de pronto:** editar arena (paleta, mouse, import/export, modo custom) sem a lógica inline no `main`.
 
 ### Fase 3 — Simulação e controle manual
 

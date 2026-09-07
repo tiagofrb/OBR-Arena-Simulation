@@ -38,9 +38,14 @@ Módulos extraídos:
 7. **MapMeta** — metadados do mapa e andares.
 8. **TileProps** — painel de propriedades e menu de contexto.
 9. **EditorDragDrop** — preview e estado de drag-and-drop.
+10. **TilePalette** — preview e paleta custom.
+11. **OfficialCatalog** — catálogo oficial de imagens.
+12. **EditorInput** — mouse/wheel do canvas no editor.
+13. **ArenaIO** — export/import JSON e pathfinding agendado.
+14. **CustomMode** — gates de UI do modo custom.
 
-A lógica do editor e o **shell** (abas, teclado, loop, placar, persist) estão extraídos.
-Ainda em `main.js`: paletas DOM, mouse do canvas, import/export, modo custom, simulação e construtores.
+A lógica do editor (incl. paletas, input, I/O, modo custom) e o **shell** estão extraídos.
+Ainda em `main.js`: simulação, sensores, script do robô e construtores.
 O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
 
 ## Convenções
@@ -51,6 +56,6 @@ O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.
 
 ## Limitações conhecidas
 
-- `main.js` ainda é grande (~4k linhas); fases 0–1 concluídas; extração segue `docs/modularization-plan.md`.
+- `main.js` ainda é grande (~3,5k linhas); fases 0–2 concluídas; extração segue `docs/modularization-plan.md`.
 - Multi-floor (gz) está parcialmente implementado; pathfinding e alguns fluxos assumem floor 0.
 - Não há suite de testes automatizados ainda — módulos novos devem ser escritos de forma testável.

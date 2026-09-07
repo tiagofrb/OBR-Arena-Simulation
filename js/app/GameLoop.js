@@ -1,5 +1,7 @@
 /**
  * Loop principal de animação e wiring de resize do canvas.
+ * Erros em update/draw são capturados para o RAF não morrer
+ * (app “congelado” se uma exceção interromper o loop).
  */
 
 /**
@@ -9,12 +11,16 @@
  */
 export function startGameLoop(sim, deps) {
   function loop() {
-    if (sim.mode === 'sim' && sim.running) {
-      deps.update(sim.dt * sim.speed);
-      deps.draw();
-    } else if (sim.mode === 'manual') {
-      deps.update(sim.dt * sim.speed);
-      deps.draw();
+    try {
+      if (sim.mode === 'sim' && sim.running) {
+        deps.update(sim.dt * sim.speed);
+        deps.draw();
+      } else if (sim.mode === 'manual') {
+        deps.update(sim.dt * sim.speed);
+        deps.draw();
+      }
+    } catch (err) {
+      console.error('[GameLoop]', err);
     }
     requestAnimationFrame(loop);
   }
@@ -22,9 +28,17 @@ export function startGameLoop(sim, deps) {
 }
 
 /**
- * Liga o listener de resize da janela.
+ * Liga o listener de resize da janela (idempotente).
  * @param {() => void} resizeCanvas
  */
 export function wireResize(resizeCanvas) {
-  window.addEventListener('resize', () => resizeCanvas());
+  if (wireResize._wired) return;
+  wireResize._wired = true;
+  window.addEventListener('resize', () => {
+    try {
+      resizeCanvas();
+    } catch (err) {
+      console.error('[resize]', err);
+    }
+  });
 }

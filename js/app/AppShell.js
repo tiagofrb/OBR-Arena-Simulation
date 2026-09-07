@@ -134,6 +134,8 @@ export function setMode(sim, mode, deps) {
       deps.draw();
       deps.schedulePathfinding();
     } else if (mode === 'manual') {
+      // Libera movimento mesmo se a simulação anterior tinha marcado finished
+      sim.finished = false;
       if (!sim.robot) deps.placeRobotAtStart();
       const hb = document.getElementById('helpBox');
       if (hb) hb.textContent = 'WASD/setas. Após chegada use Voltar ao Início.';

@@ -64,14 +64,16 @@ export function wireKeyboard(sim, deps) {
     }
 
     if (e.key === 'Escape') {
-      if (sim.mode === 'constructor' && deps.ctor && deps.ctor.lineStart) {
-        deps.ctor.lineStart = null;
+      const ctorState = deps.getCtor ? deps.getCtor() : deps.ctor;
+      if (sim.mode === 'constructor' && ctorState && ctorState.lineStart) {
+        ctorState.lineStart = null;
         if (deps.drawCtor) deps.drawCtor();
         e.preventDefault();
         return;
       }
-      if (sim.mode === 'objconstructor' && deps.objCtor && deps.objCtor.lineStart) {
-        deps.objCtor.lineStart = null;
+      const objCtorState = deps.getObjCtor ? deps.getObjCtor() : deps.objCtor;
+      if (sim.mode === 'objconstructor' && objCtorState && objCtorState.lineStart) {
+        objCtorState.lineStart = null;
         if (deps.drawObjCtor) deps.drawObjCtor();
         e.preventDefault();
         return;

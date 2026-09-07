@@ -61,6 +61,11 @@ Próximos passos sugeridos (editor):
   - `js/ui/ScorePanel.js`
 - `main.js` chama `wireAppShell()` + `startGameLoop` no bootstrap
 
+### Parte 7 — Editor UI/I/O (Fase 2) ✅
+
+- `js/editor/TilePalette.js`, `OfficialCatalog.js`, `EditorInput.js`, `ArenaIO.js`, `CustomMode.js`
+- `main.js` ~3,5k linhas; `wireEditorCanvas()` no bootstrap
+
 ### Próximo — resto da modularização
 
-Roteiro em `docs/modularization-plan.md`: Fase 2 (paletas/I/O do editor) → Fase 3 (simulação/manual) → paint compartilhado → construtores.
+Roteiro em `docs/modularization-plan.md`: Fase 3 (simulação/manual) → paint compartilhado → construtores.

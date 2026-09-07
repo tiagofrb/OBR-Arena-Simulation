@@ -119,6 +119,34 @@ import {
   logUI as _logUI,
   clearLog as _clearLog
 } from './ui/ScorePanel.js';
+import {
+  ensureOfficialPalette as _ensureOfficialPalette,
+  renderOfficialPalette as _renderOfficialPalette,
+  loadOfficialTileCatalog as _loadOfficialTileCatalog,
+  probeOfficialImage as _probeOfficialImage
+} from './editor/OfficialCatalog.js';
+import {
+  updateMirrorUI as _updateMirrorUI,
+  updateCustomObjectUI as _updateCustomObjectUI,
+  updateExportHint as _updateExportHint,
+  applyCustomMode as _applyCustomMode
+} from './editor/CustomMode.js';
+import {
+  downloadJSONFile as _downloadJSONFile,
+  exportArenaJSON as _exportArenaJSON,
+  createPathfindingScheduler,
+  runPathfinding as _runPathfinding,
+  importArenaFromFile as _importArenaFromFile,
+  saveArenaToStorage as _saveArenaToStorage,
+  wireArenaIO as _wireArenaIO
+} from './editor/ArenaIO.js';
+import {
+  renderTilePreviewToCanvas as _renderTilePreviewToCanvas,
+  attachTilePreviewHover as _attachTilePreviewHover,
+  positionTilePreview as _positionTilePreview,
+  renderTilePalette as _renderTilePalette
+} from './editor/TilePalette.js';
+import { wireEditorInput } from './editor/EditorInput.js';
 
 const dataManager = new DataManager();
 
@@ -514,7 +542,10 @@ function loadScenario(key) {
 
 // ─── Update / score triggers ─────────────────────────────────
 function update(dt) {
-  if (!sim.robot || sim.finished) return;
+  // Em modo manual o robô continua móvel mesmo após "chegada" (finished);
+  // só o path automático da simulação trava em finished.
+  if (!sim.robot) return;
+  if (sim.finished && sim.mode !== 'manual') return;
   const robot = sim.robot;
   if (sim.mode === 'manual') {
     const speed = MANUAL_LINEAR_SPEED * sim.speed;
@@ -760,251 +791,46 @@ function refreshCustomSelect() {
   renderTilePalette();
 }
 
-// ─── Paleta de ladrilhos unificada (padrão + personalizados) com preview ──
-const BUILTIN_TILE_DEFS = [
-  { type: 'start', label: 'Start' },
-  { type: 'finish', label: 'Chegada' },
-  { type: 'straight', label: 'Reta' },
-  { type: 'curve90', label: 'Curva 90°' },
-  { type: 'gap', label: 'Gap' },
-  { type: 'checkpoint', label: 'Checkpoint' },
-  { type: 'intersection', label: 'Interseção' },
-  { type: 'intersection_t', label: 'Interseção T' },
-  { type: 'lombada', label: 'Lombada' },
-  { type: 'deadend', label: 'Beco' },
-  { type: 'rescue_entry', label: 'Entrada' },
-  { type: 'rescue_green', label: 'Área verde' },
-  { type: 'rescue_red', label: 'Área vermelha' },
-  { type: 'rescue_exit', label: 'Saída' },
-  { type: 'erase', label: 'Apagar piso' }
-];
-
-function renderTilePreviewToCanvas(cnv, type, customDef) {
-  const S = cnv.width;
-  const pctx = cnv.getContext('2d');
-  pctx.clearRect(0, 0, S, S);
-  if (type === 'erase') {
-    pctx.fillStyle = '#1a232e';
-    pctx.fillRect(0, 0, S, S);
-    pctx.strokeStyle = '#576573';
-    pctx.lineWidth = Math.max(1, S * 0.03);
-    pctx.beginPath();
-    pctx.moveTo(S * 0.28, S * 0.28); pctx.lineTo(S * 0.72, S * 0.72);
-    pctx.moveTo(S * 0.72, S * 0.28); pctx.lineTo(S * 0.28, S * 0.72);
-    pctx.stroke();
-    return;
-  }
-  if (type === 'custom' && customDef) {
-    pctx.fillStyle = '#e2e8f0';
-    pctx.fillRect(0, 0, S, S);
-    if (customDef.bitmap) {
-      const img = new Image();
-      img.onload = () => { pctx.imageSmoothingEnabled = false; pctx.drawImage(img, 0, 0, S, S); };
-      img.src = customDef.bitmap;
-    } else {
-      pctx.fillStyle = '#64748b';
-      pctx.font = `${Math.round(S * 0.1)}px sans-serif`;
-      pctx.textAlign = 'center';
-      pctx.fillText(customDef.name || 'custom', S / 2, S / 2);
-    }
-    return;
-  }
-  // ladrilhos padrão: reaproveita a mesma lógica visual de drawTile, em escala S
-  pctx.fillStyle = '#f1f5f9';
-  pctx.strokeStyle = '#cbd5e1';
-  pctx.lineWidth = 1;
-  pctx.fillRect(0, 0, S, S);
-  pctx.strokeRect(0, 0, S, S);
-  const hLineP = () => {
-    pctx.strokeStyle = '#1e293b'; pctx.lineWidth = S * 0.055; pctx.lineCap = 'round';
-    pctx.beginPath(); pctx.moveTo(S * 0.07, S / 2); pctx.lineTo(S * 0.93, S / 2); pctx.stroke();
+// ─── Paleta de ladrilhos (js/editor/TilePalette.js) ──────────
+function getPreviewEls() {
+  return {
+    pop: tilePreviewPop,
+    canvas: tilePreviewCanvas,
+    cap: tilePreviewCap
   };
-  switch (type) {
-    case 'start':
-      hLineP(); pctx.fillStyle = '#22c55e';
-      pctx.beginPath(); pctx.arc(S / 2, S * 0.7, S * 0.09, 0, Math.PI * 2); pctx.fill();
-      break;
-    case 'finish':
-      hLineP(); pctx.fillStyle = '#ef4444'; pctx.fillRect(S * 0.11, S / 2 - S * 0.06, S * 0.78, S * 0.12);
-      break;
-    case 'straight': hLineP(); break;
-    case 'curve90':
-      pctx.strokeStyle = '#1e293b'; pctx.lineWidth = S * 0.055; pctx.lineCap = 'round';
-      pctx.beginPath(); pctx.moveTo(S * 0.07, S / 2); pctx.lineTo(S / 2, S / 2); pctx.lineTo(S / 2, S * 0.07); pctx.stroke();
-      break;
-    case 'gap':
-      pctx.strokeStyle = '#1e293b'; pctx.lineWidth = S * 0.055;
-      pctx.beginPath(); pctx.moveTo(S * 0.08, S / 2); pctx.lineTo(S * 0.38, S / 2);
-      pctx.moveTo(S * 0.62, S / 2); pctx.lineTo(S * 0.92, S / 2); pctx.stroke();
-      pctx.fillStyle = 'rgba(168,85,247,0.3)'; pctx.fillRect(S * 0.38, S * 0.4, S * 0.24, S * 0.2);
-      break;
-    case 'checkpoint':
-      hLineP(); pctx.fillStyle = '#f97316';
-      pctx.beginPath(); pctx.arc(S / 2, S * 0.7, S * 0.1, 0, Math.PI * 2); pctx.fill();
-      break;
-    case 'intersection':
-      pctx.strokeStyle = '#1e293b'; pctx.lineWidth = S * 0.055;
-      pctx.beginPath(); pctx.moveTo(S * 0.08, S / 2); pctx.lineTo(S * 0.92, S / 2); pctx.moveTo(S / 2, S * 0.08); pctx.lineTo(S / 2, S * 0.92); pctx.stroke();
-      pctx.fillStyle = '#22c55e'; pctx.fillRect(S / 2 - S * 0.2, S / 2 - S * 0.2, S * 0.15, S * 0.15);
-      break;
-    case 'intersection_t':
-      pctx.strokeStyle = '#1e293b'; pctx.lineWidth = S * 0.055;
-      pctx.beginPath(); pctx.moveTo(S * 0.08, S / 2); pctx.lineTo(S * 0.92, S / 2); pctx.moveTo(S / 2, S / 2); pctx.lineTo(S / 2, S * 0.92); pctx.stroke();
-      break;
-    case 'lombada':
-      hLineP(); pctx.fillStyle = '#94a3b8';
-      for (let i = 0; i < 3; i++) { pctx.beginPath(); pctx.ellipse(S * 0.28 + i * S * 0.2, S / 2, S * 0.08, S * 0.045, 0, 0, Math.PI * 2); pctx.fill(); }
-      break;
-    case 'deadend':
-      hLineP(); pctx.fillStyle = '#1e293b'; pctx.fillRect(S / 2 - S * 0.05, S * 0.12, S * 0.1, S * 0.4);
-      break;
-    case 'rescue_entry':
-      pctx.fillStyle = '#e2e8f0'; pctx.fillRect(0, 0, S, S);
-      pctx.fillStyle = '#94a3b8'; pctx.fillRect(S - S * 0.13, S * 0.1, S * 0.09, S * 0.8);
-      break;
-    case 'rescue_green':
-      pctx.fillStyle = '#e2e8f0'; pctx.fillRect(0, 0, S, S);
-      pctx.fillStyle = '#22c55e'; pctx.beginPath(); pctx.moveTo(0, 0); pctx.lineTo(S * 0.55, 0); pctx.lineTo(0, S * 0.55); pctx.closePath(); pctx.fill();
-      break;
-    case 'rescue_red':
-      pctx.fillStyle = '#e2e8f0'; pctx.fillRect(0, 0, S, S);
-      pctx.fillStyle = '#ef4444'; pctx.beginPath(); pctx.moveTo(S, 0); pctx.lineTo(S * 0.45, 0); pctx.lineTo(S, S * 0.55); pctx.closePath(); pctx.fill();
-      break;
-    case 'rescue_exit':
-      pctx.fillStyle = '#e2e8f0'; pctx.fillRect(0, 0, S, S);
-      pctx.fillStyle = '#1e293b'; pctx.fillRect(S * 0.04, S * 0.1, S * 0.09, S * 0.8);
-      break;
-    default:
-      pctx.fillStyle = '#64748b'; pctx.fillRect(S * 0.3, S * 0.3, S * 0.4, S * 0.4);
-  }
 }
-
-function attachTilePreviewHover(btn, type, customDef, label) {
-  btn.addEventListener('mouseenter', () => {
-    if (!tilePreviewPop) return;
-    renderTilePreviewToCanvas(tilePreviewCanvas, type, customDef);
-    tilePreviewCap.textContent = label;
-    tilePreviewPop.classList.add('show');
-    positionTilePreview(btn);
-  });
-  btn.addEventListener('mouseleave', () => { if (tilePreviewPop) tilePreviewPop.classList.remove('show'); });
-}
-function positionTilePreview(btn) {
-  const r = btn.getBoundingClientRect();
-  const popW = 140, popH = 170;
-  let left = r.left - popW - 10;
-  if (left < 8) left = r.right + 10;
-  let top = r.top;
-  if (top + popH > window.innerHeight - 8) top = window.innerHeight - popH - 8;
-  tilePreviewPop.style.left = left + 'px';
-  tilePreviewPop.style.top = Math.max(8, top) + 'px';
-}
-
 
 function clearTileSelection() {
   _clearTileSelection(sim);
-}
-
-function shouldKeepToolArmed(ev) {
-  return _shouldKeepToolArmed(ev);
 }
 
 function selectTileTool(type, customIdx) {
   _selectTileTool(sim, type, customIdx, { logUI });
 }
 
+function renderTilePreviewToCanvas(cnv, type, customDef) {
+  _renderTilePreviewToCanvas(cnv, type, customDef);
+}
+
+function attachTilePreviewHover(btn, type, customDef, label) {
+  _attachTilePreviewHover(btn, type, customDef, label, getPreviewEls());
+}
+
+function positionTilePreview(btn) {
+  _positionTilePreview(btn, getPreviewEls());
+}
+
 function renderTilePalette() {
-  const wrap = document.getElementById('tileTools');
-  if (!wrap) return;
-  const prevSelected = sim.selectedTool;
-  const prevCustomIdx = sim.placingCustomId;
-  wrap.innerHTML = '';
-
-  const makeSwatchCanvas = () => {
-    const c = document.createElement('canvas');
-    c.width = 44; c.height = 44;
-    return c;
-  };
-
-  if (!sim.customLibrary.length) {
-    const empty = document.createElement('p');
-    empty.className = 'key-hint';
-    empty.textContent = sim.customMode
-      ? 'Nenhum ladrilho custom. Crie no Construtor de ladrilho.'
-      : 'Ative Modo Custom e crie ladrilhos no Construtor.';
-    wrap.appendChild(empty);
-    return;
-  }
-
-  const label = document.createElement('div');
-  label.className = 'tile-section-label';
-  label.textContent = sim.customMode ? 'Criados no app' : 'Bloqueados (ative Modo Custom)';
-  wrap.appendChild(label);
-
-  sim.customLibrary.forEach((c, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'tile-btn';
-    btn.dataset.type = 'custom';
-    btn.dataset.customidx = i;
-    btn.dataset.dragKind = 'custom';
-    btn.title = c.name || ('custom ' + i);
-    if (!sim.customMode) {
-      btn.disabled = true;
-      btn.style.opacity = '0.45';
-      btn.title = 'Disponível apenas no Modo Custom';
-      btn.draggable = false;
-    } else {
-      btn.draggable = true;
-    }
-    const sw = document.createElement('span');
-    sw.className = 'swatch';
-    const cnv = makeSwatchCanvas();
-    renderTilePreviewToCanvas(cnv, 'custom', c);
-    sw.appendChild(cnv);
-    const del = document.createElement('button');
-    del.className = 'del-x';
-    del.textContent = '✕';
-    del.title = 'Excluir ladrilho personalizado';
-    del.onclick = (ev) => {
-      ev.stopPropagation();
-      if (confirm(`Excluir "${c.name}"?`)) {
-        sim.customLibrary.splice(i, 1);
-        persist('obr_custom_tiles', sim.customLibrary);
-        if (sim.selectedTool === 'custom' && sim.placingCustomId === i) {
-          clearTileSelection();
-        }
-        refreshCustomSelect();
-      }
-    };
-    btn.appendChild(sw);
-    btn.appendChild(del);
-    btn.onclick = () => selectTileTool('custom', i);
-    attachTilePreviewHover(btn, 'custom', c, `${c.name} — custom`);
-    if (sim.customMode) {
-      btn.addEventListener('dragstart', (ev) => {
-        const payload = { kind: 'custom', idx: i };
-        setDragPayload(payload);
-        ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
-        ev.dataTransfer.effectAllowed = 'copy';
-        try {
-          const empty = document.createElement('canvas');
-          empty.width = 1; empty.height = 1;
-          ev.dataTransfer.setDragImage(empty, 0, 0);
-        } catch (_) {}
-        btn.classList.add('drag-ghost');
-        showTileDragPreview(ev.clientX, ev.clientY, payload, false);
-      });
-      btn.addEventListener('dragend', () => {
-        btn.classList.remove('drag-ghost');
-        hideTileDragPreview();
-      });
-    }
-    wrap.appendChild(btn);
+  _renderTilePalette(sim, {
+    previewEls: getPreviewEls(),
+    selectTileTool,
+    clearTileSelection,
+    persist,
+    refreshCustomSelect,
+    setDragPayload,
+    showTileDragPreview,
+    hideTileDragPreview
   });
-
-  if (prevSelected === 'custom' && prevCustomIdx != null && sim.customLibrary[prevCustomIdx] && sim.customMode) {
-    selectTileTool('custom', prevCustomIdx);
-  }
 }
 
 function setMode(mode) {
@@ -1021,337 +847,16 @@ function setMode(mode) {
     updateExportHint,
     fitCamera,
     draw,
-    schedulePathfinding,
+    // const schedulePathfinding pode ainda não existir se setMode for chamado cedo
+    schedulePathfinding: () => {
+      if (typeof schedulePathfinding === 'function') schedulePathfinding();
+    },
     placeRobotAtStart
   });
 }
 
-// ─── Editor mouse ────────────────────────────────────────────
-canvas.addEventListener('click', e => {
-  if (e.button !== 0 || cam.panning) return;
-  const w = screenToWorld(e.clientX, e.clientY);
-  const { gx, gy } = worldToGrid(w.x, w.y);
-
-  if (sim.mode === 'editor') {
-    if (sim.measureMode) {
-      if (!sim.measureStart) {
-        sim.measureStart = { x: w.x, y: w.y };
-      } else {
-        const scaleMm = 300 / TILE_PX;
-        const distMm = Math.hypot(w.x - sim.measureStart.x, w.y - sim.measureStart.y) * scaleMm;
-        logUI({ t: 0, msg: `Medição (arena): ${distMm.toFixed(1)} mm`, category: 'info' });
-        sim.measureStart = null;
-        sim.measureCursor = null;
-        // keep measure mode active for multiple measures
-      }
-      draw();
-      return;
-    }
-    // Clique fora da grade: desseleciona e limpa propriedades
-    if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) {
-      if (sim.selectedTile || sim.selectedObject) {
-        sim.selectedTile = null;
-        sim.selectedObject = null;
-        const info = document.getElementById('selectedInfo');
-        if (info) info.textContent = '— (seleção)';
-        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
-        draw();
-      }
-      return;
-    }
-    let tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-    if (!tile) { tile = new Tile(gx, gy); sim.tiles.push(tile); }
-
-    // --- MARCADORES (start/chegada/checkpoint) em qualquer ladrilho ---
-    if (sim.markerTool) {
-      if (tile.type === TileType.EMPTY) {
-        logUI({ t: 0, msg: 'Coloque um ladrilho de piso antes de marcar.', category: 'warning' });
-        return;
-      }
-      pushArenaUndo();
-      if (sim.markerTool === 'clear') {
-        tile.markStart = false;
-        tile.markFinish = false;
-        tile.markCheckpoint = false;
-      } else if (sim.markerTool === 'start') {
-        // apenas um start na arena
-        sim.tiles.forEach(tt => { if (tt !== tile) tt.markStart = false; });
-        tile.markStart = !tile.markStart;
-      } else if (sim.markerTool === 'finish') {
-        tile.markFinish = !tile.markFinish;
-      } else if (sim.markerTool === 'checkpoint') {
-        tile.markCheckpoint = !tile.markCheckpoint;
-      }
-      sim.selectedTile = tile;
-      sim.selectedObject = null;
-      const flags = [
-        tile.markStart ? 'START' : null,
-        tile.markFinish ? 'CHEGADA' : null,
-        tile.markCheckpoint ? 'CP' : null
-      ].filter(Boolean).join('+') || 'nenhum';
-      document.getElementById('selectedInfo').textContent = `${tile.type} @${gx},${gy} [${flags}]`;
-      if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(tile);
-      draw();
-      return;
-    }
-
-    // --- camada de OBJETOS ---
-    if (sim.objectTool) {
-      pushArenaUndo();
-      if (sim.objectTool === 'erase') {
-        sim.objects = sim.objects.filter(o => !(o.gx === gx && o.gy === gy));
-        sim.selectedObject = null;
-      } else if (sim.objectTool === 'custom') {
-        if (!sim.customMode) {
-          logUI({ t: 0, msg: 'Modo oficial: objetos personalizados bloqueados.', category: 'warning' });
-          return;
-        }
-        const osel = document.getElementById('customObjSelect');
-        if (osel && osel.value !== '') sim.placingCustomObjId = parseInt(osel.value, 10);
-        const oid = sim.placingCustomObjId;
-        if (oid != null && Number.isFinite(oid) && sim.customObjLibrary[oid]) {
-          const def = JSON.parse(JSON.stringify(sim.customObjLibrary[oid]));
-          def._instanceId = 'o' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-          sim.objects = sim.objects.filter(o => !(o.gx === gx && o.gy === gy));
-          const obj = { gx, gy, type: 'custom', rotation: 0, mirrorH: false, mirrorV: false, custom: def, points: def.points, _img: null, _imgSrc: null, _imgToken: null };
-          sim.objects.push(obj);
-          sim.selectedObject = obj;
-        }
-      } else {
-        sim.objects = sim.objects.filter(o => !(o.gx === gx && o.gy === gy));
-        const pts = sim.objectTool === 'rampa' ? 10 : 20;
-        const obj = { gx, gy, type: sim.objectTool, rotation: 0, mirrorH: false, mirrorV: false, points: pts };
-        sim.objects.push(obj);
-        sim.selectedObject = obj;
-      }
-      document.getElementById('selectedInfo').textContent = sim.selectedObject
-        ? `obj ${sim.selectedObject.type} @${gx},${gy}` : '—';
-      draw();
-      return;
-    }
-
-    // --- camada de LADRILHOS ---
-    if (sim.selectedTool === 'erase' || sim.selectedTool === 'custom' || sim.selectedTool === 'official' || sim.selectedTool) {
-      pushArenaUndo();
-    }
-    if (sim.selectedTool === 'erase') {
-      tile.type = TileType.EMPTY; tile.custom = null; tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
-      tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-      tile.opts = {};
-      tile.markStart = false; tile.markFinish = false; tile.markCheckpoint = false;
-      sim.selectedTile = null;
-    } else if (sim.selectedTool === 'official' && sim.placingOfficialFile) {
-      const file = sim.placingOfficialFile;
-      const entry = (sim.officialTileFiles || []).find(x => x.file === file);
-      const type = (entry && entry.type) || classifyOfficialFilename(file);
-      tile.type = type;
-      tile.custom = null;
-      tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-      // espelhamento sempre desligado para peças oficiais (compatibilidade)
-      tile.rotation = 0;
-      tile.mirrorH = false;
-      tile.mirrorV = false;
-      tile.opts = {
-        officialImage: file,
-        officialId: file.replace(/\.png$/i, ''),
-        fromOfficialPalette: true
-      };
-      if (type === 'rescue_exit') tile.markFinish = true;
-      tile.gz = sim.currentFloor || 0;
-      sim.selectedTile = tile;
-      document.getElementById('selectedInfo').textContent = `oficial ${file} @${gx},${gy},z${tile.gz}`;
-      if (!sim.shiftDown) clearTileSelection();
-      fillTilePropsPanel(tile);
-    } else if (sim.selectedTool === 'custom') {
-      // Modo oficial: proíbe colocar ladrilhos personalizados
-      if (!sim.customMode) {
-        logUI({
-          t: 0,
-          msg: 'Modo oficial ativo: apenas ladrilhos do catálogo OBR. Ative Modo Custom em Backup & dados para usar personalizados.',
-          category: 'warning'
-        });
-        return;
-      }
-      const cid = sim.placingCustomId;
-      if (cid != null && Number.isFinite(cid) && sim.customLibrary[cid]) {
-        tile.type = TileType.CUSTOM;
-        tile.custom = JSON.parse(JSON.stringify(sim.customLibrary[cid]));
-        // token único força recarregar bitmap (evita “custom antigo” na tela)
-        tile.custom._instanceId = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
-        tile.gz = sim.currentFloor || 0;
-        tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-        sim.selectedTile = tile;
-        document.getElementById('selectedInfo').textContent = `custom "${tile.custom.name}" @${gx},${gy},z${tile.gz}`;
-        if (!sim.shiftDown) clearTileSelection();
-        fillTilePropsPanel(tile);
-      }
-    } else if (sim.selectedTool && sim.selectedTool !== 'official') {
-      tile.type = sim.selectedTool;
-      tile.custom = null;
-      tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-      tile.opts = sim.selectedTool === 'intersection' ? { hasGreen: true } : {};
-      tile.rotation = 0; tile.mirrorH = false; tile.mirrorV = false;
-      tile.gz = sim.currentFloor || 0;
-      // tipos clássicos também ligam o marcador correspondente
-      if (sim.selectedTool === 'start') {
-        sim.tiles.forEach(tt => { if (tt !== tile) { tt.markStart = false; } });
-        tile.markStart = true; tile.markFinish = false; tile.markCheckpoint = false;
-      } else if (sim.selectedTool === 'finish') {
-        tile.markFinish = true;
-      } else if (sim.selectedTool === 'checkpoint') {
-        tile.markCheckpoint = true;
-      }
-      sim.selectedTile = tile;
-      document.getElementById('selectedInfo').textContent = `${tile.type} @${gx},${gy}`;
-      if (!sim.shiftDown && sim.selectedTool) clearTileSelection();
-      fillTilePropsPanel(tile);
-    } else {
-      // Sem ferramenta armada: selecionar / desselecionar
-      const obj = (sim.objects || []).find(o => o.gx === gx && o.gy === gy && (o.gz || 0) === (sim.currentFloor || 0));
-      if (obj) {
-        sim.selectedObject = obj;
-        sim.selectedTile = null;
-        document.getElementById('selectedInfo').textContent = `obj ${obj.type} @${gx},${gy}`;
-        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
-      } else if (tile.type !== TileType.EMPTY) {
-        sim.selectedTile = tile;
-        sim.selectedObject = null;
-        document.getElementById('selectedInfo').textContent =
-          `${tile.type} @${gx},${gy} rot=${tile.rotation || 0}°`;
-        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(tile);
-      } else {
-        // Célula vazia: desseleciona
-        sim.selectedTile = null;
-        sim.selectedObject = null;
-        const info = document.getElementById('selectedInfo');
-        if (info) info.textContent = '— (seleção)';
-        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
-      }
-    }
-    draw();
-    schedulePathfinding();
-  } else if (sim.mode === 'manual' && sim.placingRobot) {
-    if (!sim.robot) sim.robot = new Robot(w.x, w.y, 0);
-    else { sim.robot.pos.x = w.x; sim.robot.pos.y = w.y; }
-    sim.placingRobot = false;
-    document.getElementById('btnPlaceRobot').textContent = 'Posicionar Robô';
-    draw();
-  }
-});
-
-// Middle-click picker + pan
-canvas.addEventListener('mousedown', e => {
-  // Shift + botão do meio = pan da câmera
-  if (e.button === 1 && e.shiftKey) {
-    e.preventDefault();
-    cam.panning = true;
-    cam.lastX = e.clientX;
-    cam.lastY = e.clientY;
-    canvas.style.cursor = 'grabbing';
-  }
-});
-canvas.addEventListener('mousemove', e => {
-  if (cam.panning) {
-    cam.ox += e.clientX - cam.lastX;
-    cam.oy += e.clientY - cam.lastY;
-    cam.lastX = e.clientX;
-    cam.lastY = e.clientY;
-    cam.userZoom = cam.scale;
-    updateZoomUI();
-    draw();
-    return;
-  }
-  if (sim.mode === 'editor' && sim.measureMode) {
-    const wpos = screenToWorld(e.clientX, e.clientY);
-    sim.measureCursor = { x: wpos.x, y: wpos.y };
-    draw();
-  }
-});
-window.addEventListener('mouseup', () => {
-  if (cam.panning) {
-    cam.panning = false;
-    canvas.style.cursor = '';
-  }
-});
-
-canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
-canvas.addEventListener('auxclick', e => {
-  if (e.button !== 1 || sim.mode !== 'editor') return;
-  e.preventDefault();
-  // if minimal movement, treat as picker not pan
-  const w = screenToWorld(e.clientX, e.clientY);
-  const { gx, gy } = worldToGrid(w.x, w.y);
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (!tile || tile.type === TileType.EMPTY) return;
-
-  sim.selectedTile = tile;
-  sim.objectTool = null;
-  sim.markerTool = null;
-  document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
-
-  // Ladrilho oficial (skin do catálogo OBR)
-  if (tile.opts && tile.opts.officialImage) {
-    const file = tile.opts.officialImage;
-    setEditorLayer('official');
-    // garante paleta carregada antes de destacar o botão
-    ensureOfficialPalette().then(() => {
-      selectOfficialTile(file);
-      document.getElementById('selectedInfo').textContent =
-        `oficial ${file} @${gx},${gy} rot=${tile.rotation || 0}`;
-      logUI({ t: 0, msg: `Picker: oficial ${file}`, category: 'info' });
-      draw();
-    });
-    return;
-  }
-
-  // Ladrilho personalizado
-  if (tile.type === TileType.CUSTOM && tile.custom) {
-    setEditorLayer('tiles');
-    let idx = sim.customLibrary.findIndex(c => c.name === tile.custom.name);
-    if (idx < 0) {
-      sim.customLibrary.push(JSON.parse(JSON.stringify(tile.custom)));
-      idx = sim.customLibrary.length - 1;
-      refreshCustomSelect();
-    }
-    selectTileTool('custom', idx);
-    document.getElementById('selectedInfo').textContent =
-      `custom "${tile.custom.name}" @${gx},${gy}`;
-    logUI({ t: 0, msg: `Picker: custom "${tile.custom.name}"`, category: 'info' });
-    draw();
-    return;
-  }
-
-  // Ladrilho padrão do app
-  setEditorLayer('tiles');
-  selectTileTool(tile.type, null);
-  document.getElementById('selectedInfo').textContent =
-    `${tile.type} @${gx},${gy} rot=${tile.rotation || 0}`;
-  logUI({ t: 0, msg: `Picker: ${tile.type}`, category: 'info' });
-  draw();
-});
-
-canvas.addEventListener('contextmenu', e => {
-  if (sim.mode !== 'editor') return;
-  e.preventDefault();
-  const w = screenToWorld(e.clientX, e.clientY);
-  const { gx, gy } = worldToGrid(w.x, w.y);
-  const z = sim.currentFloor || 0;
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z)
-    || sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (!tile || tile.type === TileType.EMPTY) {
-    hideTileContextMenu();
-    logUI({ t: 0, msg: 'Nenhum ladrilho nesta célula.', category: 'warning' });
-    return;
-  }
-  sim.selectedTile = tile;
-  showTileContextMenu(e.clientX, e.clientY, tile);
-});
-
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  setZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12);
-}, { passive: false });
+// ─── Editor mouse (js/editor/EditorInput.js) ─────────────────
+// wired in wireEditorCanvas() after helper defs exist
 
 // ─── Constructor pixel 3×3 (centro 300×300 mm, 1px=1mm) + grid lock ─
 const CELL_MM = 300;          // um ladrilho
@@ -1994,31 +1499,21 @@ if (btnShowOfficial) btnShowOfficial.onclick = () => setEditorLayer('official');
 const btnShowObjects = document.getElementById('btnShowObjects');
 if (btnShowObjects) btnShowObjects.onclick = () => setEditorLayer('objects');
 
-// ─── Catálogo de ladrilhos oficiais ─────────────────────────
+// ─── Catálogo de ladrilhos oficiais (js/editor/OfficialCatalog.js)
 sim.placingOfficialFile = null;
 sim.officialTileFiles = []; // [{ file, url, type }]
+const _officialPaletteState = { loaded: false };
 
 function classifyOfficialFilename(file) {
   return _classifyOfficialFilename(file);
 }
 
 function probeOfficialImage(file) {
-  return new Promise(resolve => {
-    const img = new Image();
-    const url = `assets/official-tiles/${file}`;
-    img.onload = () => resolve({ file, url, ok: true, type: classifyOfficialFilename(file) });
-    img.onerror = () => resolve({ file, url, ok: false });
-    img.src = url;
-  });
+  return _probeOfficialImage(file, classifyOfficialFilename);
 }
 
 async function loadOfficialTileCatalog() {
-  const candidates = [];
-  for (let i = 0; i <= 83; i++) candidates.push(`tile-${i}.png`);
-  candidates.push('seesaw.png', 'exit.png', 'ev1.png', 'ev2.png', 'ev3.png');
-  const results = await Promise.all(candidates.map(probeOfficialImage));
-  sim.officialTileFiles = results.filter(r => r.ok);
-  return sim.officialTileFiles;
+  return _loadOfficialTileCatalog(sim, classifyOfficialFilename);
 }
 
 function selectOfficialTile(file) {
@@ -2026,85 +1521,26 @@ function selectOfficialTile(file) {
 }
 
 function renderOfficialPalette() {
-  const wrap = document.getElementById('officialTileTools');
-  const status = document.getElementById('officialTileStatus');
-  if (!wrap) return;
-  wrap.innerHTML = '';
-  if (!sim.officialTileFiles.length) {
-    if (status) status.textContent = 'Nenhuma imagem em assets/official-tiles/. Coloque os PNGs oficiais nessa pasta.';
-    return;
-  }
-  if (status) status.textContent = `${sim.officialTileFiles.length} ladrilhos · arraste para a grade`;
-  sim.officialTileFiles.forEach(({ file, url, type }) => {
-    const btn = document.createElement('button');
-    btn.className = 'tile-btn';
-    btn.dataset.official = file;
-    btn.dataset.dragKind = 'official';
-    btn.draggable = true;
-    btn.title = `${file} (${type})`;
-    if (sim.placingOfficialFile === file && sim.selectedTool === 'official') btn.classList.add('active-tool');
-    const sw = document.createElement('span');
-    sw.className = 'swatch';
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = file;
-    img.draggable = false;
-    sw.appendChild(img);
-    btn.appendChild(sw);
-    btn.onclick = () => selectOfficialTile(file);
-    btn.addEventListener('dragstart', (ev) => {
-      const payload = { kind: 'official', file };
-      setDragPayload(payload);
-      ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
-      ev.dataTransfer.effectAllowed = 'copy';
-      // imagem fantasma transparente — usamos nosso preview
-      try {
-        const empty = document.createElement('canvas');
-        empty.width = 1; empty.height = 1;
-        ev.dataTransfer.setDragImage(empty, 0, 0);
-      } catch (_) {}
-      btn.classList.add('drag-ghost');
-      showTileDragPreview(ev.clientX, ev.clientY, payload, false);
-    });
-    btn.addEventListener('dragend', () => {
-      btn.classList.remove('drag-ghost');
-      hideTileDragPreview();
-    });
-    wrap.appendChild(btn);
+  _renderOfficialPalette(sim, {
+    selectOfficialTile,
+    setDragPayload,
+    showTileDragPreview,
+    hideTileDragPreview
   });
 }
 
-let _officialPaletteLoaded = false;
 async function ensureOfficialPalette() {
-  if (!_officialPaletteLoaded) {
-    const status = document.getElementById('officialTileStatus');
-    if (status) status.textContent = 'Carregando catálogo…';
-    await loadOfficialTileCatalog();
-    _officialPaletteLoaded = true;
-  }
-  renderOfficialPalette();
+  return _ensureOfficialPalette(sim, _officialPaletteState, {
+    classifyOfficialFilename,
+    selectOfficialTile,
+    setDragPayload,
+    showTileDragPreview,
+    hideTileDragPreview
+  });
 }
 
 function updateMirrorUI() {
-  const h = document.getElementById('btnMirrorH');
-  const v = document.getElementById('btnMirrorV');
-  const hint = document.getElementById('mirrorHint');
-  const allow = !!sim.customMode;
-  if (h) {
-    h.disabled = !allow;
-    h.style.opacity = allow ? '1' : '0.45';
-    h.title = allow ? 'Espelhar horizontal' : 'Disponível apenas no Modo Custom';
-  }
-  if (v) {
-    v.disabled = !allow;
-    v.style.opacity = allow ? '1' : '0.45';
-    v.title = allow ? 'Espelhar vertical' : 'Disponível apenas no Modo Custom';
-  }
-  if (hint) {
-    hint.textContent = allow
-      ? 'Espelhamento: ativo (Modo Custom).'
-      : 'Espelhamento: desativado (ative Modo Custom para usar — evita incompatibilidade com o oficial).';
-  }
+  _updateMirrorUI(sim);
 }
 
 document.querySelectorAll('#objectTools button').forEach(btn => {
@@ -2183,151 +1619,36 @@ document.getElementById('btnClearArena').onclick = () => {
     _clearArena(sim, { draw });
   }
 };
-document.getElementById('btnSaveArena').onclick = () => {
-  sim.customArena = sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON());
-  sim.customArenaObjects = JSON.parse(JSON.stringify(sim.objects));
-  logUI({ t: 0, msg: `Arena salva (${sim.customArena.length} ladrilhos, ${sim.objects.length} objetos).`, category: 'success' });
-  try {
-    persist('obr_custom_arena', sim.customArena);
-    persist('obr_custom_arena_objects', sim.customArenaObjects);
-  } catch (e) {}
-};
 function downloadJSONFile(filename, data) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  _downloadJSONFile(filename, data);
+}
+
+function getArenaIODeps() {
+  return {
+    syncMapMetaFromUI,
+    convertToOfficialArena,
+    updateTileIndex,
+    validateOfficialMap,
+    TileType,
+    logUI,
+    isOfficialArenaFormat,
+    convertOfficialArena,
+    pushArenaUndo,
+    ensureGridMatrix,
+    Tile,
+    persist,
+    applyMapMetaToUI,
+    ensureMapMetaDefaults,
+    fitCamera,
+    draw
+  };
 }
 
 function exportArenaJSON(forceFormat) {
-  // forceFormat: 'official' | 'app' | null (auto by customMode)
-  const format = forceFormat || (sim.customMode ? 'app' : 'official');
-  try {
-    if (format === 'official') {
-      syncMapMetaFromUI();
-      let official = convertToOfficialArena({
-        gridW: sim.gridW,
-        gridH: sim.gridH,
-        tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
-        objects: sim.objects,
-        meta: sim.officialMeta || {}
-      });
-      const pf = updateTileIndex(official);
-      official = pf.map;
-      const v = validateOfficialMap(official);
-      if (!v.ok) {
-        const msg = v.errors.join('; ');
-        logUI({ t: 0, msg: 'Validação oficial: ' + msg, category: 'warning' });
-        if (!confirm('Aviso de validação:\\n' + msg + '\\n\\nExportar mesmo assim?')) return;
-      }
-      const name = (official.name || 'arena').replace(/[^\\w\\-]+/g, '_');
-      downloadJSONFile(name + '-oficial.json', official);
-      logUI({
-        t: 0,
-        msg: `Exportado RCJ/OBR (${Object.keys(official.tiles || {}).length} tiles, path index=${official.indexCount || 0})`,
-        category: 'success'
-      });
-    } else {
-      const data = {
-        gridW: sim.gridW, gridH: sim.gridH,
-        tiles: sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
-        objects: sim.objects,
-        meta: sim.officialMeta || null
-      };
-      downloadJSONFile('obr-arena.json', data);
-      logUI({ t: 0, msg: 'Exportado no formato do trainer (obr-arena.json).', category: 'success' });
-    }
-  } catch (err) {
-    alert('Falha ao exportar: ' + err.message);
-  }
+  _exportArenaJSON(sim, forceFormat, getArenaIODeps());
 }
 
-document.getElementById('btnExport')?.addEventListener('click', () => exportArenaJSON(null));
-document.getElementById('btnExportAlt')?.addEventListener('click', () => {
-  // formato alternativo ao modo atual
-  exportArenaJSON(sim.customMode ? 'official' : 'app');
-});
-
-
-document.getElementById('btnImportJSON').onclick = () => document.getElementById('importFile').click();
-document.getElementById('btnMeasure').onclick = () => {
-  sim.measureMode = !sim.measureMode;
-  sim.measureStart = null;
-  sim.measureCursor = null;
-  sim.objectTool = null;
-  sim.selectedTool = null;
-  document.querySelectorAll('#tileTools button, #objectTools button').forEach(b => b.classList.remove('active-tool'));
-  document.getElementById('btnMeasure').classList.toggle('active-tool', sim.measureMode);
-  document.getElementById('measureHint').textContent = sim.measureMode
-    ? 'Medição ATIVA: clique 2 pontos. Esc cancela.'
-    : 'Medir: 2 cliques na arena. Esc cancela.';
-  draw();
-};
-document.getElementById('importFile').onchange = async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    let data = JSON.parse(await file.text());
-
-    // Formato oficial (tileSet + tiles objeto)
-    if (isOfficialArenaFormat(data)) {
-      if (sim.customMode) {
-        alert('Modo custom está ativo. Desative-o para importar arenas do formato oficial.');
-        e.target.value = '';
-        return;
-      }
-      data = convertOfficialArena(data);
-      sim.officialMeta = data.meta || null;
-      logUI({
-        t: 0,
-        msg: `Arena oficial convertida${data.meta?.name ? ': ' + data.meta.name : ''} (${data.tiles.length} ladrilhos).`,
-        category: 'info'
-      });
-    } else if (data.gridW || Array.isArray(data.tiles)) {
-      // import interno: não sobrescreve meta oficial se já existir, a menos que venha embutida
-      if (data.meta) sim.officialMeta = data.meta;
-    }
-
-    // Limpa a arena antes de importar
-    pushArenaUndo();
-    sim.tiles.forEach(t => { t.type = TileType.EMPTY; t.custom = null; t._img = null; t._imgSrc = null; });
-    sim.objects = [];
-    sim.selectedTile = null;
-    sim.selectedObject = null;
-
-    if (data.gridW) sim.gridW = data.gridW;
-    if (data.gridH) sim.gridH = data.gridH;
-    document.getElementById('gridW').value = sim.gridW;
-    document.getElementById('gridH').value = sim.gridH;
-    document.getElementById('gridWVal').textContent = sim.gridW;
-    document.getElementById('gridHVal').textContent = sim.gridH;
-    ensureGridMatrix();
-    (data.tiles || data).forEach(o => {
-      const t = Tile.fromJSON(o);
-      // match by x,y,z when available
-      const idx = sim.tiles.findIndex(x =>
-        x.gx === t.gx && x.gy === t.gy && (x.gz || 0) === (t.gz || 0));
-      if (idx >= 0) sim.tiles[idx] = t;
-      else sim.tiles.push(t);
-    });
-    sim.objects = data.objects || [];
-    sim.customArena = sim.tiles.filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON());
-    sim.customArenaObjects = JSON.parse(JSON.stringify(sim.objects));
-    persist('obr_custom_arena', sim.customArena);
-    persist('obr_custom_arena_objects', sim.customArenaObjects);
-    if (sim.officialMeta) applyMapMetaToUI();
-    else ensureMapMetaDefaults();
-    logUI({ t: 0, msg: 'Arena limpa e importada.', category: 'success' });
-    fitCamera();
-    draw();
-  } catch (err) {
-    alert('JSON inválido: ' + err.message);
-  }
-  e.target.value = '';
-};
+_wireArenaIO(sim, getArenaIODeps());
 
 document.getElementById('gridW').oninput = e => resizeGrid(parseInt(e.target.value), sim.gridH);
 document.getElementById('gridH').oninput = e => resizeGrid(sim.gridW, parseInt(e.target.value));
@@ -2531,19 +1852,51 @@ document.getElementById('btnCtorSave').onclick = () => {
 };
 
 // Teclado e resize (js/app/Keyboard.js + GameLoop.js) — wiring após defs de undo/rotate
+function wireEditorCanvas() {
+  wireEditorInput({
+    canvas,
+    cam,
+    sim,
+    deps: {
+      screenToWorld,
+      worldToGrid,
+      draw,
+      logUI,
+      pushArenaUndo,
+      clearTileSelection,
+      fillTilePropsPanel,
+      schedulePathfinding,
+      classifyOfficialFilename,
+      setEditorLayer,
+      ensureOfficialPalette,
+      selectOfficialTile,
+      selectTileTool,
+      refreshCustomSelect,
+      showTileContextMenu,
+      hideTileContextMenu,
+      setZoom,
+      updateZoomUI,
+      Tile,
+      Robot,
+      TileType
+    }
+  });
+}
+
 function wireAppShell() {
+  // deps resolvidos na hora do evento (funções/estado definidos mais abaixo no arquivo)
   wireKeyboard(sim, {
     setMode,
-    undoCtor: () => undoCtor(),
-    redoCtor: () => redoCtor(),
-    undoObjCtor: () => undoObjCtor(),
-    redoObjCtor: () => redoObjCtor(),
+    undoCtor: () => { if (typeof undoCtor === 'function') undoCtor(); },
+    redoCtor: () => { if (typeof redoCtor === 'function') redoCtor(); },
+    undoObjCtor: () => { if (typeof undoObjCtor === 'function') undoObjCtor(); },
+    redoObjCtor: () => { if (typeof redoObjCtor === 'function') redoObjCtor(); },
     undoArena,
     redoArena,
-    get ctor() { return ctor; },
-    drawCtor: () => drawCtor(),
-    get objCtor() { return objCtor; },
-    drawObjCtor: () => drawObjCtor(),
+    getCtor: () => (typeof ctor !== 'undefined' ? ctor : null),
+    drawCtor: () => { if (typeof drawCtor === 'function') drawCtor(); },
+    getObjCtor: () => (typeof objCtor !== 'undefined' ? objCtor : null),
+    drawObjCtor: () => { if (typeof drawObjCtor === 'function') drawObjCtor(); },
     rotateSelected,
     mirrorSelected,
     clearTileAt,
@@ -3766,35 +3119,13 @@ document.getElementById('btnClearAllData')?.addEventListener('click', async () =
 });
 
 function applyCustomMode(enabled) {
-  sim.customMode = !!enabled;
-  persist('obr_custom_mode', sim.customMode);
-  const tog = document.getElementById('toggleCustomMode');
-  if (tog) tog.checked = sim.customMode;
-  // Ao sair do modo custom, zera espelhamentos e desarma ferramenta custom
-  if (!sim.customMode) {
-    (sim.tiles || []).forEach(t => { t.mirrorH = false; t.mirrorV = false; });
-    (sim.objects || []).forEach(o => { o.mirrorH = false; o.mirrorV = false; });
-    if (sim.selectedTool === 'custom') {
-      sim.selectedTool = 'straight';
-      sim.placingCustomId = null;
-    }
-  }
-  updateMirrorUI();
-  renderTilePalette();
-  updateCustomObjectUI();
-  updateExportHint();
-  if (!sim.customMode) {
-    // garante camada oficial visível
-    setEditorLayer('official');
-  }
-  logUI({
-    t: 0,
-    msg: sim.customMode
-      ? 'Modo custom ativado — espelhamento, ladrilhos e objetos personalizados liberados.'
-      : 'Modo custom desativado — personalizados bloqueados; export padrão = JSON oficial RCJ/OBR.',
-    category: sim.customMode ? 'warning' : 'success'
+  _applyCustomMode(sim, enabled, {
+    persist,
+    renderTilePalette,
+    setEditorLayer,
+    logUI,
+    draw
   });
-  draw();
 }
 
 const toggleCustomEl = document.getElementById('toggleCustomMode');
@@ -3834,6 +3165,7 @@ if (toggleCustomEl) {
     sim.robot.width = sim.activeRobotDef.body.w * MM_TO_WORLD;
     sim.robot.height = sim.activeRobotDef.body.h * MM_TO_WORLD;
   }
+  wireEditorCanvas();
   wireAppShell();
   setMode('sim');
   loop();
@@ -4066,54 +3398,19 @@ function paintDragPreview(cnv, payload) {
 // Drag & drop paleta ↔ grade + pathfinding automático
 // ═══════════════════════════════════════════════════════════════
 
-let _pathfindTimer = null;
-
-function schedulePathfinding() {
-  if (_pathfindTimer) clearTimeout(_pathfindTimer);
-  _pathfindTimer = setTimeout(runPathfinding, 120);
-}
+const _pathfindState = { timer: null };
 
 function runPathfinding() {
-  try {
-    if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
-    const official = convertToOfficialArena({
-      gridW: sim.gridW,
-      gridH: sim.gridH,
-      tiles: (sim.tiles || []).filter(t => t.type !== TileType.EMPTY).map(t => t.toJSON()),
-      objects: sim.objects || [],
-      meta: sim.officialMeta || {}
-    });
-    const { map, indexCount } = updateTileIndex(official);
-    // Espelha index/next de volta nos tiles internos (opts)
-    for (const key of Object.keys(map.tiles || {})) {
-      const ot = map.tiles[key];
-      const parts = key.split(',').map(Number);
-      const [x, y, z] = parts;
-      const tile = (sim.tiles || []).find(t => t.gx === x && t.gy === y && (t.gz || 0) === (z || 0));
-      if (tile) {
-        if (!tile.opts) tile.opts = {};
-        tile.opts.pathIndex = ot.index || [];
-        tile.opts.pathNext = ot.next || [];
-      }
-    }
-    if (sim.officialMeta) {
-      sim.officialMeta.indexCount = indexCount;
-      sim.officialMeta.EvacuationAreaLoPIndex = map.EvacuationAreaLoPIndex;
-    }
-    const hint = document.getElementById('mapValidateHint');
-    if (hint && indexCount > 0) {
-      // não sobrescreve aviso de finished sem start
-      if (!(sim.officialMeta && sim.officialMeta.finished && indexCount === 0)) {
-        const base = hint.textContent || '';
-        if (!base.includes('path')) {
-          /* keep existing validate text */
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('pathfinding:', err);
-  }
+  _runPathfinding(sim, {
+    syncMapMetaFromUI,
+    convertToOfficialArena,
+    updateTileIndex,
+    TileType
+  });
 }
+
+const schedulePathfinding = createPathfindingScheduler(_pathfindState, runPathfinding);
+
 
 function placeTileAt(gx, gy, payload) {
   return _placeTileAt(sim, gx, gy, payload, {
@@ -4270,49 +3567,11 @@ function wireArenaDragDrop() {
 }
 
 function updateCustomObjectUI() {
-  const block = document.getElementById('customObjectsBlock');
-  const btn = document.querySelector('#objectToolsCustom button[data-obj="custom"]')
-    || document.querySelector('#objectTools button[data-obj="custom"]');
-  const sel = document.getElementById('customObjSelect');
-  const allow = !!sim.customMode;
-  if (block) block.classList.toggle('hidden', !allow);
-  if (btn) {
-    btn.disabled = !allow;
-    btn.style.opacity = allow ? '1' : '0.45';
-    btn.title = allow ? 'Objeto custom' : 'Disponível apenas no Modo Custom';
-    // re-bind click if in custom block
-    if (!btn._wiredCustom) {
-      btn._wiredCustom = true;
-      btn.onclick = () => {
-        if (!sim.customMode) {
-          logUI({ t: 0, msg: 'Modo oficial: objetos personalizados bloqueados.', category: 'warning' });
-          return;
-        }
-        document.querySelectorAll('#objectTools button, #objectToolsCustom button').forEach(b => b.classList.remove('active-tool'));
-        btn.classList.add('active-tool');
-        sim.objectTool = 'custom';
-        sim.selectedTool = null;
-        sim.markerTool = null;
-        const s = document.getElementById('customObjSelect');
-        if (s && s.value !== '') sim.placingCustomObjId = parseInt(s.value, 10);
-      };
-    }
-  }
-  if (sel) {
-    sel.disabled = !allow;
-    sel.style.opacity = allow ? '1' : '0.45';
-  }
-  if (!allow && sim.objectTool === 'custom') {
-    sim.objectTool = null;
-  }
+  _updateCustomObjectUI(sim, { logUI });
 }
 
 function updateExportHint() {
-  const el = document.getElementById('exportHint');
-  if (!el) return;
-  el.textContent = sim.customMode
-    ? 'Modo Custom: Exportar = formato do app. «Exportar (outro)» = JSON oficial RCJ. Arraste tiles · Shift+R = anti-horário.'
-    : 'Modo oficial: Exportar = JSON RCJ/OBR (com pathfinding). «Exportar (outro)» = formato do app. Arraste tiles · Shift+R = anti-horário.';
+  _updateExportHint(sim);
 }
 
 try {
