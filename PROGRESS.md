@@ -86,6 +86,13 @@ Próximos passos sugeridos (editor):
 - `js/constructors/RobotConstructor.js`
 - `main.js` ~1,6k linhas
 
-### Próximo
+### Parte 12 — Session + DnD (Fase 7) ✅
 
-Fase 7 opcional (`createSessionState`). Checklist de pronto do plano: main só bootstrap + `sim`.
+- `js/core/session.js`
+- DnD completo em `EditorDragDrop.js`
+- `main.js` ~1,5k linhas
+
+### Status
+
+**Campanha de modularização (fases 0–7) concluída.**
+Próximos trabalhos: features/bugfixes normais, não extração estrutural.

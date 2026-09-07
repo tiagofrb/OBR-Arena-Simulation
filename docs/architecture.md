@@ -14,6 +14,7 @@ Principais camadas:
 | Simulação | `js/sim/*` | Cenários, update, path/manual/script, sensores |
 | Paint (ctors) | `js/constructors/paint/*` | Buffer/undo e câmera compartilhados |
 | Construtores | `js/constructors/{Tile,Object,Robot}Constructor.js` | UI tile, objeto e robô |
+| Sessão | `js/core/session.js` | `createSessionState` / `createCameraState` |
 | Shell | `js/app/*` | Abas/`setMode`, teclado, game loop |
 | UI placar | `js/ui/ScorePanel.js` | Log de eventos e placar |
 | Core | `js/core/*` | Constantes, persist, typing |
@@ -47,8 +48,8 @@ Módulos extraídos:
 13. **ArenaIO** — export/import JSON e pathfinding agendado.
 14. **CustomMode** — gates de UI do modo custom.
 
-A lógica do editor, shell, simulação, paint e **todos os construtores** estão extraídos.
-`main.js` fica como bootstrap + estado `sim` + wrappers (fase 7 opcional).
+Modularização fases 0–7 concluída: editor, shell, sim, paint, construtores e session factory.
+`main.js` é bootstrap + wrappers finos + wiring residual de UI.
 O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
 
 ## Convenções
@@ -59,6 +60,6 @@ O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.
 
 ## Limitações conhecidas
 
-- `main.js` ~1,6k linhas; fases 0–6 concluídas; fase 7 (session state) opcional.
+- `main.js` ~1,5k linhas; fases 0–7 concluídas.
 - Multi-floor (gz) está parcialmente implementado; pathfinding e alguns fluxos assumem floor 0.
 - Não há suite de testes automatizados ainda — módulos novos devem ser escritos de forma testável.

@@ -182,14 +182,11 @@ Não usa o paint buffer (corpo + detectores, não pixels).
 
 Sensores da **simulação** ficam em `sim/Sensors.js` (Fase 3); aqui só a UI de definição.
 
-### Fase 7 — Estado `sim` (opcional, por último)
+### Fase 7 — Estado `sim` ✅
 
-Hoje `sim` é um objeto único. Não é obrigatório fatiar agora. Se ainda houver acoplamento doloroso depois das fases 1–6:
-
-- `createSessionState()` em `js/core/session.js` com os campos atuais;
-- módulos continuam recebendo o mesmo objeto (sem quebrar tudo de uma vez).
-
-Não introduzir store/Redux. ES modules + parâmetro `sim` bastam.
+- `js/core/session.js`: `createSessionState()`, `createCameraState()`
+- `EditorDragDrop.wireArenaDragDrop` (DnD saiu do `main`)
+- Módulos continuam recebendo o mesmo objeto mutável (sem Redux)
 
 ---
 
@@ -237,12 +234,12 @@ Nada de regra de negócio nova nesse arquivo.
 
 Usar o checklist de `AGENTS.md`. Em especial:
 
-- [ ] Wrappers vazios no `main` removidos se o import direto basta
-- [ ] Pintura de construtor não copiada de novo
-- [ ] Magics (velocidade, histórico do ctor, limiares de sensor) em `constants.js` com comentário
-- [ ] Módulo testável (`sim` + `deps`); **sem** escrever testes nesta campanha
-- [ ] `docs/architecture.md` e este plano alinhados à pasta real
-- [ ] `CHANGELOG.md` se a estrutura ou o uso mudou de forma visível para quem clona o repo
+- [x] Wrappers no `main` só onde o teclado/bootstrap ainda precisa de símbolos locais
+- [x] Pintura de construtor em `paint/` (não duplicada)
+- [x] Magics em `constants.js` com comentário
+- [x] Módulo testável (`sim` + `deps`); **sem** escrever testes nesta campanha
+- [x] `docs/architecture.md` e este plano alinhados à pasta real
+- [x] `CHANGELOG.md` atualizado
 
 ---
 
