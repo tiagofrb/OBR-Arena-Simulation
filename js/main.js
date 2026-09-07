@@ -4,6 +4,9 @@
  * - Grid resize preserva ladrilhos
  * - Spec: R/T/Esc, picker, import/export
  * - IndexedDB + compatibilidade formato oficial + modo custom
+ *
+ * Módulos do editor de arena extraídos para js/editor/ e js/render/
+ * visando modularidade e evolução de features.
  */
 import { TILE_PX, LINE_W, Vec, Tile, Robot, TileType, TILE_LABELS, transformPoint, inverseTransform } from './engine/Models.js';
 import { ScoreEngine } from './engine/ScoreEngine.js';
@@ -17,6 +20,87 @@ import {
   validateOfficialMap
 } from './io/officialArenaAdapter.js';
 import { updateTileIndex } from './io/pathFinder.js';
+import {
+  ARENA_HISTORY_MAX,
+  DEFAULT_GRID_W,
+  DEFAULT_GRID_H,
+  CAMERA_FIT_PAD,
+  CAMERA_MAX_FIT_SCALE,
+  CAMERA_MIN_SCALE,
+  STORAGE_KEYS,
+  APP_MODES
+} from './core/constants.js';
+import {
+  snapshotArena as _snapshotArena,
+  applyArenaSnapshot as _applyArenaSnapshot,
+  pushArenaUndo as _pushArenaUndo,
+  undoArena as _undoArena,
+  redoArena as _redoArena
+} from './editor/ArenaHistory.js';
+import {
+  ensureGridMatrix as _ensureGridMatrix,
+  resizeGrid as _resizeGrid,
+  updateGridStatus as _updateGridStatus,
+  findTile
+} from './editor/GridManager.js';
+import {
+  worldSize as camWorldSize,
+  fitCamera as camFitCamera,
+  setZoom as camSetZoom,
+  screenToWorld as camScreenToWorld,
+  worldToGrid as camWorldToGrid,
+  updateZoomUI as camUpdateZoomUI
+} from './render/Camera.js';
+import {
+  placeTileAt as _placeTileAt,
+  clearTileAt as _clearTileAt,
+  moveTile as _moveTile,
+  rotateSelected as _rotateSelected,
+  mirrorSelected as _mirrorSelected,
+  clearArena as _clearArena,
+  classifyOfficialFilename as _classifyOfficialFilename,
+  findTileAt
+} from './editor/TileOperations.js';
+import {
+  clearTileSelection as _clearTileSelection,
+  shouldKeepToolArmed as _shouldKeepToolArmed,
+  selectTileTool as _selectTileTool,
+  selectOfficialTile as _selectOfficialTile,
+  setEditorLayer as _setEditorLayer,
+  cancelEditorTools as _cancelEditorTools,
+  tileIsStart as _tileIsStart,
+  tileIsFinish as _tileIsFinish,
+  tileIsCheckpoint as _tileIsCheckpoint
+} from './editor/EditorTools.js';
+import {
+  drawArena as _drawArena,
+  roundRect as _roundRect
+} from './render/ArenaRenderer.js';
+import {
+  ensureMapMetaDefaults as _ensureMapMetaDefaults,
+  applyMapMetaToUI as _applyMapMetaToUI,
+  syncMapMetaFromUI as _syncMapMetaFromUI,
+  updateMapValidateHint as _updateMapValidateHint,
+  rebuildFloorButtons as _rebuildFloorButtons,
+  setCurrentFloor as _setCurrentFloor
+} from './editor/MapMeta.js';
+import {
+  hideTileContextMenu as _hideTileContextMenu,
+  showTileContextMenu as _showTileContextMenu,
+  fillTilePropsPanel as _fillTilePropsPanel,
+  updateCheckpointAvailability as _updateCheckpointAvailability,
+  applyTilePropsFromPanel as _applyTilePropsFromPanel,
+  getContextTile
+} from './editor/TileProps.js';
+import {
+  showTileDragPreview as _showTileDragPreview,
+  hideTileDragPreview as _hideTileDragPreview,
+  paintDragPreview as _paintDragPreview,
+  getDragMoveFrom,
+  setDragMoveFrom,
+  getDragPayload,
+  setDragPayload
+} from './editor/EditorDragDrop.js';
 
 const dataManager = new DataManager();
 
@@ -60,7 +144,7 @@ const cam = {
 };
 
 function worldSize() {
-  return { w: sim.gridW * TILE_PX, h: sim.gridH * TILE_PX };
+  return camWorldSize(sim);
 }
 
 function resizeCanvas() {
@@ -81,56 +165,34 @@ function resizeCanvas() {
 }
 
 function fitCamera() {
-  const { w, h } = worldSize();
-  const cssW = canvas.clientWidth;
-  const cssH = canvas.clientHeight;
-  const pad = 24;
-  const sx = (cssW - pad * 2) / w;
-  const sy = (cssH - pad * 2) / h;
-  cam.scale = Math.min(sx, sy, 2.5);
-  if (cam.scale < 0.15) cam.scale = 0.15;
-  cam.ox = (cssW - w * cam.scale) / 2;
-  cam.oy = (cssH - h * cam.scale) / 2;
-  cam.userZoom = null;
-  updateZoomUI();
+  camFitCamera(cam, canvas, sim, updateZoomUI);
 }
 
 function setZoom(factor) {
-  const cssW = canvas.clientWidth;
-  const cssH = canvas.clientHeight;
-  const { w, h } = worldSize();
-  const cx = cssW / 2;
-  const cy = cssH / 2;
-  // zoom around center
-  const wx = (cx - cam.ox) / cam.scale;
-  const wy = (cy - cam.oy) / cam.scale;
-  cam.scale = Math.max(0.12, Math.min(3.5, cam.scale * factor));
-  cam.ox = cx - wx * cam.scale;
-  cam.oy = cy - wy * cam.scale;
-  cam.userZoom = cam.scale;
-  updateZoomUI();
+  camSetZoom(cam, canvas, factor, updateZoomUI);
   draw();
 }
 
 function updateZoomUI() {
+  camUpdateZoomUI(cam);
   const pct = Math.round(cam.scale * 100);
-  document.getElementById('zoomLabel').textContent = pct + '%';
-  document.getElementById('zoomStatus').textContent = cam.userZoom == null ? 'Ajustar' : pct + '%';
+  const status = document.getElementById('zoomStatus');
+  if (status) status.textContent = cam.userZoom == null ? 'Ajustar' : pct + '%';
 }
 
 function screenToWorld(clientX, clientY) {
+  const w = camScreenToWorld(cam, canvas, clientX, clientY);
   const rect = canvas.getBoundingClientRect();
-  const sx = clientX - rect.left;
-  const sy = clientY - rect.top;
   return {
-    x: (sx - cam.ox) / cam.scale,
-    y: (sy - cam.oy) / cam.scale,
-    sx, sy
+    x: w.x,
+    y: w.y,
+    sx: clientX - rect.left,
+    sy: clientY - rect.top
   };
 }
 
 function worldToGrid(wx, wy) {
-  return { gx: Math.floor(wx / TILE_PX), gy: Math.floor(wy / TILE_PX) };
+  return camWorldToGrid(wx, wy);
 }
 
 // ─── State ───────────────────────────────────────────────────
@@ -149,8 +211,8 @@ const sim = {
   tilesSinceCP: 0,
   attempt: 1,
   finished: false,
-  gridW: 10,
-  gridH: 6,
+  gridW: DEFAULT_GRID_W,
+  gridH: DEFAULT_GRID_H,
   selectedTool: 'straight',
   selectedTile: null,
   placingRobot: false,
@@ -172,7 +234,7 @@ const sim = {
   measureCursor: null,
   arenaUndo: [],
   arenaRedo: [],
-  arenaHistoryMax: 40,
+  arenaHistoryMax: ARENA_HISTORY_MAX,
   // robô custom + script
   robotLibrary: [],
   activeRobotDef: null,
@@ -278,49 +340,33 @@ const scenarios = {
 
 // ─── Grid helpers (preserve tiles on resize) ─────────────────
 function ensureGridMatrix() {
-  const map = new Map(sim.tiles.map(t => [`${t.gx},${t.gy}`, t]));
-  const next = [];
-  for (let y = 0; y < sim.gridH; y++) {
-    for (let x = 0; x < sim.gridW; x++) {
-      const k = `${x},${y}`;
-      if (map.has(k)) next.push(map.get(k));
-      else next.push(new Tile(x, y, TileType.EMPTY));
-    }
-  }
-  // drop tiles outside new bounds
-  sim.tiles = next;
+  _ensureGridMatrix(sim);
 }
 
 function resizeGrid(nw, nh) {
-  sim.gridW = nw;
-  sim.gridH = nh;
-  document.getElementById('gridWVal').textContent = nw;
-  document.getElementById('gridHVal').textContent = nh;
-  ensureGridMatrix();
-  fitCamera();
-  draw();
-  updateGridStatus();
+  _resizeGrid(sim, nw, nh, () => {
+    const gwv = document.getElementById('gridWVal');
+    const ghv = document.getElementById('gridHVal');
+    if (gwv) gwv.textContent = sim.gridW;
+    if (ghv) ghv.textContent = sim.gridH;
+    fitCamera();
+    draw();
+    updateGridStatus();
+  });
 }
 function updateGridStatus() {
-  const el = document.getElementById('gridStatus');
-  if (el) el.textContent = sim.gridW + '×' + sim.gridH;
+  _updateGridStatus(sim);
 }
 
 // ─── Load / robot ────────────────────────────────────────────
 function tileIsStart(t) {
-  if (!t) return false;
-  if (typeof t.isStart === 'function') return t.isStart();
-  return t.type === TileType.START || !!t.markStart;
+  return _tileIsStart(t);
 }
 function tileIsFinish(t) {
-  if (!t) return false;
-  if (typeof t.isFinish === 'function') return t.isFinish();
-  return t.type === TileType.FINISH || !!t.markFinish;
+  return _tileIsFinish(t);
 }
 function tileIsCheckpoint(t) {
-  if (!t) return false;
-  if (typeof t.isCheckpoint === 'function') return t.isCheckpoint();
-  return t.type === TileType.CHECKPOINT || !!t.markCheckpoint;
+  return _tileIsCheckpoint(t);
 }
 
 function placeRobotAtStart() {
@@ -624,453 +670,23 @@ function checkTileEvents(robot) {
   sim.lastTile = tile;
 }
 
-// ─── Render ──────────────────────────────────────────────────
+// ─── Render (delegado a js/render/ArenaRenderer.js) ──────────
+function getRenderDeps() {
+  return {
+    requestRedraw: () => draw(),
+    getCachedOfficialImage,
+    preloadOfficialImage
+  };
+}
+
 function draw() {
-  const cssW = canvas.clientWidth;
-  const cssH = canvas.clientHeight;
-  ctx.save();
-  ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(0, 0, cssW, cssH);
-
-  ctx.translate(cam.ox, cam.oy);
-  ctx.scale(cam.scale, cam.scale);
-
-  // full grid always (editor and others)
-  for (let y = 0; y < sim.gridH; y++) {
-    for (let x = 0; x < sim.gridW; x++) {
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1 / cam.scale;
-      ctx.strokeRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
-    }
-  }
-
-  sim.tiles.forEach(t => { if (t.type !== TileType.EMPTY) drawTile(t); });
-  sim.objects.forEach(o => drawArenaObject(o));
-
-  if (sim.selectedTile && sim.mode === 'editor') {
-    const t = sim.selectedTile;
-    ctx.strokeStyle = '#3b82f6';
-    ctx.lineWidth = 3 / cam.scale;
-    ctx.strokeRect(t.worldX + 2, t.worldY + 2, TILE_PX - 4, TILE_PX - 4);
-  }
-  if (sim.selectedObject && sim.mode === 'editor') {
-    const o = sim.selectedObject;
-    const cx = o.gx * TILE_PX + TILE_PX / 2;
-    const cy = o.gy * TILE_PX + TILE_PX / 2;
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 2.5 / cam.scale;
-    ctx.strokeRect(cx - TILE_PX * 0.35, cy - TILE_PX * 0.35, TILE_PX * 0.7, TILE_PX * 0.7);
-  }
-
-  if (sim.mode === 'sim' && sim.path.length > 1) {
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(59,130,246,0.35)';
-    ctx.lineWidth = 2 / cam.scale;
-    ctx.setLineDash([4 / cam.scale, 6 / cam.scale]);
-    ctx.moveTo(sim.path[0].x, sim.path[0].y);
-    for (let i = 1; i < sim.path.length; i++) ctx.lineTo(sim.path[i].x, sim.path[i].y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  if (sim.robot) drawRobot(sim.robot);
-
-  // medição na arena (coordenadas em mm: 1 tile = 300mm)
-  if (sim.measureMode && (sim.measureStart || sim.measureCursor)) {
-    const scaleMm = 300 / TILE_PX; // world px → mm
-    ctx.save();
-    ctx.strokeStyle = 'rgba(234,179,8,0.95)';
-    ctx.fillStyle = '#fbbf24';
-    ctx.lineWidth = 2 / cam.scale;
-    ctx.setLineDash([6 / cam.scale, 4 / cam.scale]);
-    if (sim.measureStart && sim.measureCursor) {
-      ctx.beginPath();
-      ctx.moveTo(sim.measureStart.x, sim.measureStart.y);
-      ctx.lineTo(sim.measureCursor.x, sim.measureCursor.y);
-      ctx.stroke();
-      const distPx = Math.hypot(sim.measureCursor.x - sim.measureStart.x, sim.measureCursor.y - sim.measureStart.y);
-      const distMm = distPx * scaleMm;
-      ctx.setLineDash([]);
-      ctx.font = `${14 / cam.scale}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.fillText(distMm.toFixed(1) + ' mm', (sim.measureStart.x + sim.measureCursor.x) / 2, (sim.measureStart.y + sim.measureCursor.y) / 2 - 10 / cam.scale);
-    } else if (sim.measureCursor) {
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.arc(sim.measureCursor.x, sim.measureCursor.y, 4 / cam.scale, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-  ctx.restore();
-}
-
-function drawArenaObject(o) {
-  const cx = o.gx * TILE_PX + TILE_PX / 2;
-  const cy = o.gy * TILE_PX + TILE_PX / 2;
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(((o.rotation || 0) * Math.PI) / 180);
-  if (o.mirrorH) ctx.scale(-1, 1);
-  if (o.mirrorV) ctx.scale(1, -1);
-
-  if (o.type === 'custom' && o.custom && o.custom.bitmap) {
-    const token = o.custom._instanceId || o.custom.bitmap;
-    if (!o._img || o._imgSrc !== o.custom.bitmap || o._imgToken !== token) {
-      o._img = new Image();
-      o._imgSrc = o.custom.bitmap;
-      o._imgToken = token;
-      o._img.src = o.custom.bitmap;
-      o._img.onload = () => draw();
-    }
-    const s = TILE_PX * 0.85;
-    ctx.imageSmoothingEnabled = false;
-    if (o._img.complete && o._img.naturalWidth > 0) ctx.drawImage(o._img, -s / 2, -s / 2, s, s);
-    ctx.restore();
-    return;
-  }
-
-  if (o.type === 'obstacle') {
-    ctx.fillStyle = '#64748b';
-    ctx.fillRect(-11, -20, 22, 40);
-  } else if (o.type === 'gangorra') {
-    ctx.fillStyle = '#78716c';
-    ctx.beginPath();
-    ctx.moveTo(-22, 10); ctx.lineTo(0, -16); ctx.lineTo(22, 10);
-    ctx.closePath(); ctx.fill();
-  } else if (o.type === 'rampa') {
-    ctx.fillStyle = 'rgba(251,146,60,0.75)';
-    ctx.beginPath();
-    ctx.moveTo(-24, 12); ctx.lineTo(24, -12); ctx.lineTo(24, 12);
-    ctx.closePath(); ctx.fill();
-  }
-  ctx.restore();
-}
-
-
-function drawTileMarkers(t) {
-  if (!tileIsStart(t) && !tileIsFinish(t) && !tileIsCheckpoint(t)) return;
-  const x = t.worldX, y = t.worldY, S = TILE_PX;
-  ctx.save();
-  // badges no canto
-  let ox = 4;
-  if (tileIsStart(t)) {
-    ctx.fillStyle = 'rgba(34,197,94,0.92)';
-    ctx.fillRect(x + ox, y + 4, 22, 12);
-    ctx.fillStyle = '#fff';
-    ctx.font = `${8 / cam.scale}px sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.fillText('START', x + ox + 2, y + 13);
-    ox += 26;
-  }
-  if (tileIsFinish(t)) {
-    ctx.fillStyle = 'rgba(239,68,68,0.92)';
-    ctx.fillRect(x + ox, y + 4, 28, 12);
-    ctx.fillStyle = '#fff';
-    ctx.font = `${8 / cam.scale}px sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.fillText('CHEG', x + ox + 2, y + 13);
-    ox += 32;
-  }
-  if (tileIsCheckpoint(t)) {
-    ctx.fillStyle = 'rgba(249,115,22,0.92)';
-    ctx.beginPath();
-    ctx.arc(x + S - 12, y + S - 12, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = `${8 / cam.scale}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText('CP', x + S - 12, y + S - 9);
-  }
-  ctx.restore();
-}
-
-function drawTile(t) {
-  const x = t.worldX, y = t.worldY, cx = x + TILE_PX / 2, cy = y + TILE_PX / 2;
-
-  // Skin oficial (se não estiver em modo custom e houver officialImage)
-  if (!sim.customMode && t.opts && t.opts.officialImage) {
-    const img = getCachedOfficialImage(t.opts.officialImage);
-    if (img && img.complete && img.naturalWidth > 0) {
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate((t.rotation * Math.PI) / 180);
-      if (t.mirrorH) ctx.scale(-1, 1);
-      if (t.mirrorV) ctx.scale(1, -1);
-      ctx.drawImage(img, -TILE_PX / 2, -TILE_PX / 2, TILE_PX, TILE_PX);
-      ctx.restore();
-      drawTileMarkers(t);
-      return;
-    }
-    if (img && !img.complete) {
-      img.onload = () => draw();
-    } else if (!img) {
-      preloadOfficialImage(t.opts.officialImage);
-    }
-    // fallback: continua com desenho nativo do app
-  }
-
-  ctx.fillStyle = '#f1f5f9';
-  ctx.strokeStyle = '#cbd5e1';
-  ctx.lineWidth = 1 / cam.scale;
-  ctx.fillRect(x, y, TILE_PX, TILE_PX);
-  ctx.strokeRect(x, y, TILE_PX, TILE_PX);
-
-  if (t.type === TileType.CUSTOM && t.custom) {
-    drawCustom(t, x, y);
-    ctx.fillStyle = 'rgba(59,130,246,0.85)';
-    ctx.font = `${9 / cam.scale}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText('CUSTOM', cx, y + 11);
-    drawTileMarkers(t);
-    return;
-  }
-
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate((t.rotation * Math.PI) / 180);
-  if (t.mirrorH) ctx.scale(-1, 1);
-  if (t.mirrorV) ctx.scale(1, -1);
-  ctx.translate(-TILE_PX / 2, -TILE_PX / 2);
-
-  const S = TILE_PX;
-  switch (t.type) {
-    case TileType.START:
-      hLine(S); ctx.fillStyle = '#22c55e';
-      ctx.beginPath(); ctx.arc(S / 2, S / 2 + 14, 6, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#166534'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('START', S / 2, 12);
-      break;
-    case TileType.FINISH:
-      hLine(S); ctx.fillStyle = '#ef4444'; ctx.fillRect(8, S / 2 - 4, S - 16, 8);
-      ctx.fillStyle = '#991b1b'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('CHEGADA', S / 2, 12);
-      break;
-    case TileType.STRAIGHT: hLine(S); break;
-    case TileType.CURVE90:
-      ctx.strokeStyle = '#1e293b'; ctx.lineWidth = LINE_W; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(5, S / 2); ctx.lineTo(S / 2, S / 2); ctx.lineTo(S / 2, 5); ctx.stroke();
-      break;
-    case TileType.OBSTACLE:
-      hLine(S); ctx.fillStyle = '#64748b'; ctx.fillRect(S / 2 - 11, S / 2 - 20, 22, 40); break;
-    case TileType.GAP:
-      ctx.strokeStyle = '#1e293b'; ctx.lineWidth = LINE_W;
-      ctx.beginPath(); ctx.moveTo(6, S / 2); ctx.lineTo(S / 2 - 12, S / 2);
-      ctx.moveTo(S / 2 + 12, S / 2); ctx.lineTo(S - 6, S / 2); ctx.stroke();
-      ctx.fillStyle = 'rgba(168,85,247,0.25)'; ctx.fillRect(S / 2 - 12, S / 2 - 8, 24, 16); break;
-    case TileType.LOMBADA:
-      hLine(S); ctx.fillStyle = '#94a3b8';
-      for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.ellipse(18 + i * 18, S / 2, 7, 3.5, 0, 0, Math.PI * 2); ctx.fill(); }
-      break;
-    case TileType.GANGORRA:
-      hLine(S); ctx.fillStyle = '#78716c';
-      ctx.beginPath(); ctx.moveTo(10, S / 2 + 8); ctx.lineTo(S / 2, S / 2 - 14); ctx.lineTo(S - 10, S / 2 + 8); ctx.closePath(); ctx.fill();
-      break;
-    case TileType.RAMPA:
-      hLine(S); ctx.fillStyle = 'rgba(251,146,60,0.4)';
-      ctx.beginPath(); ctx.moveTo(8, S / 2 + 10); ctx.lineTo(S - 8, S / 2 - 10); ctx.lineTo(S - 8, S / 2 + 10); ctx.closePath(); ctx.fill();
-      break;
-    case TileType.INTERSECTION:
-      ctx.strokeStyle = '#1e293b'; ctx.lineWidth = LINE_W;
-      ctx.beginPath(); ctx.moveTo(6, S / 2); ctx.lineTo(S - 6, S / 2); ctx.moveTo(S / 2, 6); ctx.lineTo(S / 2, S - 6); ctx.stroke();
-      ctx.fillStyle = '#22c55e'; ctx.fillRect(S / 2 - 16, S / 2 - 16, 11, 11); break;
-    case TileType.INTERSECTION_T:
-      ctx.strokeStyle = '#1e293b'; ctx.lineWidth = LINE_W;
-      ctx.beginPath(); ctx.moveTo(6, S / 2); ctx.lineTo(S - 6, S / 2); ctx.moveTo(S / 2, S / 2); ctx.lineTo(S / 2, S - 6); ctx.stroke();
-      break;
-    case TileType.DEADEND:
-      hLine(S); ctx.fillStyle = '#1e293b'; ctx.fillRect(S / 2 - 4, 10, 8, S / 2 - 10); break;
-    case TileType.CHECKPOINT:
-      hLine(S); ctx.fillStyle = '#f97316';
-      ctx.beginPath(); ctx.arc(S / 2, S / 2 + 14, 7, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#9a3412'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('CP', S / 2, 12); break;
-    case TileType.RESCUE_ENTRY:
-      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(0, 0, S, S);
-      ctx.fillStyle = '#94a3b8'; ctx.fillRect(S - 9, 8, 7, S - 16);
-      ctx.fillStyle = '#64748b'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('ENTRADA', S / 2, S / 2); break;
-    case TileType.RESCUE:
-      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(0, 0, S, S); break;
-    case TileType.RESCUE_GREEN:
-      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(0, 0, S, S);
-      ctx.fillStyle = '#22c55e'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(40, 0); ctx.lineTo(0, 40); ctx.closePath(); ctx.fill();
-      break;
-    case TileType.RESCUE_RED:
-      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(0, 0, S, S);
-      ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(S, 0); ctx.lineTo(S - 40, 0); ctx.lineTo(S, 40); ctx.closePath(); ctx.fill();
-      break;
-    case TileType.RESCUE_EXIT:
-      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(0, 0, S, S);
-      ctx.fillStyle = '#1e293b'; ctx.fillRect(2, 8, 7, S - 16);
-      ctx.fillStyle = '#64748b'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SAÍDA', S / 2, S / 2); break;
-  }
-  ctx.restore();
-  drawTileMarkers(t);
-}
-
-function hLine(S) {
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = LINE_W;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(5, S / 2);
-  ctx.lineTo(S - 5, S / 2);
-  ctx.stroke();
-}
-
-function drawCustom(t, ox, oy) {
-  const def = t.custom;
-  if (def && def.bitmap) {
-    const token = def._instanceId || def.bitmap;
-    // recarrega se bitmap OU instância mudou (substituição de custom no mesmo slot)
-    if (!t._img || t._imgSrc !== def.bitmap || t._imgToken !== token) {
-      t._img = new Image();
-      t._imgSrc = def.bitmap;
-      t._imgToken = token;
-      t._img.src = def.bitmap;
-      t._img.onload = () => draw();
-    }
-    ctx.save();
-    ctx.translate(ox + TILE_PX / 2, oy + TILE_PX / 2);
-    ctx.rotate((t.rotation * Math.PI) / 180);
-    if (t.mirrorH) ctx.scale(-1, 1);
-    if (t.mirrorV) ctx.scale(1, -1);
-    ctx.imageSmoothingEnabled = false;
-    if (t._img.complete && t._img.naturalWidth > 0) {
-      ctx.drawImage(t._img, -TILE_PX / 2, -TILE_PX / 2, TILE_PX, TILE_PX);
-    } else {
-      ctx.fillStyle = '#e2e8f0';
-      ctx.fillRect(-TILE_PX / 2, -TILE_PX / 2, TILE_PX, TILE_PX);
-      ctx.fillStyle = '#64748b';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(def.name || 'custom', 0, 4);
-    }
-    ctx.restore();
-    return;
-  }
-  if (def && def.lines) {
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = LINE_W;
-    ctx.lineCap = 'round';
-    for (const line of def.lines) {
-      if (line.length < 2) continue;
-      ctx.beginPath();
-      for (let i = 0; i < line.length; i++) {
-        const p = transformPoint(line[i].x, line[i].y, t.rotation, t.mirrorH, t.mirrorV);
-        const px = ox + p.x * TILE_PX, py = oy + p.y * TILE_PX;
-        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-    }
-  }
-  if (def && def.objects) {
-    for (const obj of def.objects) {
-      const p = transformPoint(obj.x + obj.w / 2, obj.y + obj.h / 2, t.rotation, t.mirrorH, t.mirrorV);
-      const pw = obj.w * TILE_PX, ph = obj.h * TILE_PX;
-      if (obj.type === 'green') ctx.fillStyle = '#22c55e';
-      else if (obj.type === 'gap') ctx.fillStyle = 'rgba(168,85,247,0.4)';
-      else ctx.fillStyle = '#64748b';
-      ctx.fillRect(ox + p.x * TILE_PX - pw / 2, oy + p.y * TILE_PX - ph / 2, pw, ph);
-    }
-  }
-  if (def && def.zones) {
-    ctx.fillStyle = 'rgba(34,197,94,0.25)';
-    ctx.strokeStyle = 'rgba(34,197,94,0.7)';
-    ctx.lineWidth = 1.5;
-    for (const z of def.zones) {
-      const p = transformPoint(z.x + z.w / 2, z.y + z.h / 2, t.rotation, t.mirrorH, t.mirrorV);
-      const pw = z.w * TILE_PX, ph = z.h * TILE_PX;
-      ctx.fillRect(ox + p.x * TILE_PX - pw / 2, oy + p.y * TILE_PX - ph / 2, pw, ph);
-      ctx.strokeRect(ox + p.x * TILE_PX - pw / 2, oy + p.y * TILE_PX - ph / 2, pw, ph);
-    }
-  }
-}
-
-function drawRobot(r) {
-  ctx.save();
-  ctx.translate(r.pos.x, r.pos.y);
-  ctx.rotate(r.angle);
-  const mm = TILE_PX / 300;
-  const def = r.definition || sim.activeRobotDef;
-  if (def && def.body) {
-    const bw = (def.body.w || 120) * mm;
-    const bh = (def.body.h || 150) * mm;
-    r.width = bw;
-    r.height = bh;
-  }
-  ctx.fillStyle = '#3b82f6';
-  ctx.strokeStyle = '#1e40af';
-  ctx.lineWidth = 2 / Math.max(cam.scale, 0.01);
-  roundRect(-r.width / 2, -r.height / 2, r.width, r.height, 4);
-  ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#93c5fd';
-  ctx.fillRect(-7, -r.height / 2 - 2, 14, 5);
-  ctx.fillStyle = '#1e293b';
-  ctx.fillRect(-r.width / 2 - 3, -9, 4, 18);
-  ctx.fillRect(r.width / 2 - 1, -9, 4, 18);
-  // detectores
-  if (def && Array.isArray(def.detectors)) {
-    for (const d of def.detectors) {
-      drawDetectorOnRobot(ctx, d, mm);
-    }
-  }
-  if (r.carrying) {
-    ctx.fillStyle = r.carrying === 'alive' ? '#e5e7eb' : '#111';
-    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
-  }
-  ctx.restore();
-}
-
-/** Desenha detector no referencial do robô (já traduzido/rotacionado). mm = px por mm */
-function drawDetectorOnRobot(c, d, mm) {
-  c.save();
-  if (d.kind === 'under') {
-    // +Y = frente no modelo → no sprite (após rotate) frente é -Y
-    const x = (d.x || 0) * mm, y = -((d.y || 0) * mm);
-    const w = Math.max(2, (d.w || 10) * mm), h = Math.max(2, (d.h || 10) * mm);
-    c.fillStyle = 'rgba(34,197,94,0.35)';
-    c.strokeStyle = 'rgba(34,197,94,0.95)';
-    c.lineWidth = 1.2 / Math.max(cam.scale, 0.01);
-    c.fillRect(x - w / 2, y - h / 2, w, h);
-    c.strokeRect(x - w / 2, y - h / 2, w, h);
-  } else if (d.kind === 'forward') {
-    c.fillStyle = 'rgba(249,115,22,0.28)';
-    c.strokeStyle = 'rgba(249,115,22,0.95)';
-    c.lineWidth = 1.2 / Math.max(cam.scale, 0.01);
-    const ox = (d.offsetX || 0) * mm;
-    const oy = (d.offsetY != null ? d.offsetY : (sim.activeRobotDef?.body?.h || 150) / 2) * mm;
-    const len = Math.max(4, (d.length || 80) * mm);
-    const wid = Math.max(4, (d.width || 40) * mm);
-    c.beginPath();
-    if (d.shape === 'triangle') {
-      // base perto do robô, ponta à frente (-Y no ref do robô? +Y = frente)
-      // frente = -Y em canvas do robô? No drawRobot, angle 0: fillRect front is at -height/2, so frente = -Y
-      // Mas no plano: pos update uses sin/cos with frente = -Y world when angle=0... 
-      // robot.pos.y -= cos(angle)*v → angle 0 move negative Y. Front of sprite is -height/2.
-      // Detectors: +Y local = frente no construtor; no desenho do robô frente visual = -Y.
-      // Converter: local (x,y) com +Y frente → canvas robot (-y para frente visual) → use y_draw = -y
-      c.moveTo(ox - wid / 2, -oy);
-      c.lineTo(ox + wid / 2, -oy);
-      c.lineTo(ox, -(oy + len));
-      c.closePath();
-    } else {
-      c.rect(ox - wid / 2, -(oy + len), wid, len);
-    }
-    c.fill();
-    c.stroke();
-  }
-  c.restore();
+  _drawArena(ctx, canvas, cam, sim, getRenderDeps());
 }
 
 function roundRect(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+  _roundRect(ctx, x, y, w, h, r);
 }
+
 
 // ─── UI helpers ──────────────────────────────────────────────
 function updateScoreUI() {
@@ -1289,39 +905,15 @@ function positionTilePreview(btn) {
 
 
 function clearTileSelection() {
-  sim.selectedTool = null;
-  sim.placingOfficialFile = null;
-  sim.placingCustomId = null;
-  document.querySelectorAll('#tileTools button, #officialTileTools button').forEach(b => b.classList.remove('active-tool'));
+  _clearTileSelection(sim);
 }
 
 function shouldKeepToolArmed(ev) {
-  // Shift = colocar múltiplas vezes (mantém ferramenta armada)
-  if (ev && ev.shiftKey) return true;
-  return false;
+  return _shouldKeepToolArmed(ev);
 }
 
 function selectTileTool(type, customIdx) {
-  // Modo oficial: não permite armar ferramenta de ladrilho personalizado
-  if (type === 'custom' && !sim.customMode) {
-    logUI({
-      t: 0,
-      msg: 'Modo oficial ativo: ladrilhos personalizados bloqueados. Ative Modo Custom em Backup & dados.',
-      category: 'warning'
-    });
-    return;
-  }
-  sim.selectedTool = type;
-  sim.objectTool = null;
-  sim.markerTool = null;
-  sim.placingOfficialFile = null;
-  if (type === 'custom') sim.placingCustomId = customIdx;
-  else sim.placingCustomId = null;
-  document.querySelectorAll('#tileTools button').forEach(b => {
-    b.classList.toggle('active-tool', b.dataset.type === type && (type !== 'custom' || parseInt(b.dataset.customidx) === customIdx));
-  });
-  document.querySelectorAll('#officialTileTools button').forEach(b => b.classList.remove('active-tool'));
-  document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
+  _selectTileTool(sim, type, customIdx, { logUI });
 }
 
 function renderTilePalette() {
@@ -1394,7 +986,7 @@ function renderTilePalette() {
     if (sim.customMode) {
       btn.addEventListener('dragstart', (ev) => {
         const payload = { kind: 'custom', idx: i };
-        _dragPayload = payload;
+        setDragPayload(payload);
         ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
         ev.dataTransfer.effectAllowed = 'copy';
         try {
@@ -1522,7 +1114,18 @@ canvas.addEventListener('click', e => {
       draw();
       return;
     }
-    if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) return;
+    // Clique fora da grade: desseleciona e limpa propriedades
+    if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) {
+      if (sim.selectedTile || sim.selectedObject) {
+        sim.selectedTile = null;
+        sim.selectedObject = null;
+        const info = document.getElementById('selectedInfo');
+        if (info) info.textContent = '— (seleção)';
+        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
+        draw();
+      }
+      return;
+    }
     let tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
     if (!tile) { tile = new Tile(gx, gy); sim.tiles.push(tile); }
 
@@ -1547,12 +1150,14 @@ canvas.addEventListener('click', e => {
         tile.markCheckpoint = !tile.markCheckpoint;
       }
       sim.selectedTile = tile;
+      sim.selectedObject = null;
       const flags = [
         tile.markStart ? 'START' : null,
         tile.markFinish ? 'CHEGADA' : null,
         tile.markCheckpoint ? 'CP' : null
       ].filter(Boolean).join('+') || 'nenhum';
       document.getElementById('selectedInfo').textContent = `${tile.type} @${gx},${gy} [${flags}]`;
+      if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(tile);
       draw();
       return;
     }
@@ -1669,15 +1274,26 @@ canvas.addEventListener('click', e => {
       if (!sim.shiftDown && sim.selectedTool) clearTileSelection();
       fillTilePropsPanel(tile);
     } else {
-      const obj = sim.objects.find(o => o.gx === gx && o.gy === gy);
+      // Sem ferramenta armada: selecionar / desselecionar
+      const obj = (sim.objects || []).find(o => o.gx === gx && o.gy === gy && (o.gz || 0) === (sim.currentFloor || 0));
       if (obj) {
         sim.selectedObject = obj;
         sim.selectedTile = null;
         document.getElementById('selectedInfo').textContent = `obj ${obj.type} @${gx},${gy}`;
+        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
       } else if (tile.type !== TileType.EMPTY) {
         sim.selectedTile = tile;
         sim.selectedObject = null;
-        document.getElementById('selectedInfo').textContent = `${tile.type} @${gx},${gy} rot=${tile.rotation}`;
+        document.getElementById('selectedInfo').textContent =
+          `${tile.type} @${gx},${gy} rot=${tile.rotation || 0}°`;
+        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(tile);
+      } else {
+        // Célula vazia: desseleciona
+        sim.selectedTile = null;
+        sim.selectedObject = null;
+        const info = document.getElementById('selectedInfo');
+        if (info) info.textContent = '— (seleção)';
+        if (typeof fillTilePropsPanel === 'function') fillTilePropsPanel(null);
       }
     }
     draw();
@@ -2450,12 +2066,7 @@ sim.placingOfficialFile = null;
 sim.officialTileFiles = []; // [{ file, url, type }]
 
 function classifyOfficialFilename(file) {
-  const f = String(file).toLowerCase();
-  if (f === 'seesaw.png') return 'gangorra';
-  if (f === 'exit.png') return 'rescue_exit';
-  if (f.startsWith('ev')) return 'rescue';
-  // tile-N.png — tipo genérico; a imagem oficial é a fonte visual
-  return 'straight';
+  return _classifyOfficialFilename(file);
 }
 
 function probeOfficialImage(file) {
@@ -2478,16 +2089,7 @@ async function loadOfficialTileCatalog() {
 }
 
 function selectOfficialTile(file) {
-  sim.selectedTool = 'official';
-  sim.placingOfficialFile = file;
-  sim.placingCustomId = null;
-  sim.objectTool = null;
-  sim.markerTool = null;
-  document.querySelectorAll('#tileTools button, #officialTileTools button').forEach(b => b.classList.remove('active-tool'));
-  document.querySelectorAll('#objectTools button, #markerTools button').forEach(b => b.classList.remove('active-tool'));
-  const btn = [...document.querySelectorAll('#officialTileTools button')].find(b => b.dataset.official === file);
-  if (btn) btn.classList.add('active-tool');
-  logUI({ t: 0, msg: `Ladrilho oficial selecionado: ${file}`, category: 'info' });
+  _selectOfficialTile(sim, file);
 }
 
 function renderOfficialPalette() {
@@ -2519,7 +2121,7 @@ function renderOfficialPalette() {
     btn.onclick = () => selectOfficialTile(file);
     btn.addEventListener('dragstart', (ev) => {
       const payload = { kind: 'official', file };
-      _dragPayload = payload;
+      setDragPayload(payload);
       ev.dataTransfer.setData('application/x-obr-tile', JSON.stringify(payload));
       ev.dataTransfer.effectAllowed = 'copy';
       // imagem fantasma transparente — usamos nosso preview
@@ -2602,112 +2204,42 @@ document.querySelectorAll('#markerTools button').forEach(btn => {
     sim.objectTool = null;
   };
 });
+function onGridUI(w, h) {
+  const gw = document.getElementById('gridW');
+  const gh = document.getElementById('gridH');
+  const gwv = document.getElementById('gridWVal');
+  const ghv = document.getElementById('gridHVal');
+  if (gw) gw.value = w;
+  if (gh) gh.value = h;
+  if (gwv) gwv.textContent = w;
+  if (ghv) ghv.textContent = h;
+}
+
 function snapshotArena() {
-  return {
-    tiles: sim.tiles.map(t => t.toJSON()),
-    objects: JSON.parse(JSON.stringify(sim.objects.map(o => {
-      const c = { ...o };
-      delete c._img;
-      delete c._imgSrc;
-      return c;
-    }))),
-    gridW: sim.gridW,
-    gridH: sim.gridH
-  };
+  return _snapshotArena(sim);
 }
 
 function applyArenaSnapshot(snap) {
-  if (!snap) return;
-  sim.gridW = snap.gridW; sim.gridH = snap.gridH;
-  document.getElementById('gridW').value = sim.gridW;
-  document.getElementById('gridH').value = sim.gridH;
-  document.getElementById('gridWVal').textContent = sim.gridW;
-  document.getElementById('gridHVal').textContent = sim.gridH;
-  sim.tiles = (snap.tiles || []).map(o => Tile.fromJSON(o));
-  // ensure full grid matrix
-  for (let gy = 0; gy < sim.gridH; gy++) {
-    for (let gx = 0; gx < sim.gridW; gx++) {
-      if (!sim.tiles.find(t => t.gx === gx && t.gy === gy))
-        sim.tiles.push(new Tile(gx, gy, TileType.EMPTY));
-    }
-  }
-  sim.objects = JSON.parse(JSON.stringify(snap.objects || []));
-  sim.selectedTile = null;
-  sim.selectedObject = null;
+  _applyArenaSnapshot(sim, snap, onGridUI);
 }
 
 function pushArenaUndo() {
-  try {
-    sim.arenaUndo.push(snapshotArena());
-    if (sim.arenaUndo.length > sim.arenaHistoryMax) sim.arenaUndo.shift();
-    sim.arenaRedo = [];
-  } catch (e) {}
+  _pushArenaUndo(sim);
 }
 
 function undoArena() {
-  if (!sim.arenaUndo.length) return;
-  try {
-    sim.arenaRedo.push(snapshotArena());
-    applyArenaSnapshot(sim.arenaUndo.pop());
-    fitCamera();
-    draw();
-    logUI({ t: 0, msg: 'Desfazer (editor)', category: 'info' });
-  } catch (e) { console.error(e); }
+  _undoArena(sim, { fitCamera, draw, logUI, onGridUI });
 }
 
 function redoArena() {
-  if (!sim.arenaRedo.length) return;
-  try {
-    sim.arenaUndo.push(snapshotArena());
-    applyArenaSnapshot(sim.arenaRedo.pop());
-    fitCamera();
-    draw();
-    logUI({ t: 0, msg: 'Refazer (editor)', category: 'info' });
-  } catch (e) { console.error(e); }
+  _redoArena(sim, { fitCamera, draw, logUI, onGridUI });
 }
 
 function rotateSelected(dir = 1) {
-  // dir > 0: +90° horário; dir < 0: -90° anti-horário (sempre 90°, nunca 180)
-  const step = dir < 0 ? -90 : 90;
-  const norm = (r) => ((Number(r) || 0) + step + 360) % 360;
-  if (sim.selectedObject) {
-    pushArenaUndo();
-    sim.selectedObject.rotation = norm(sim.selectedObject.rotation);
-    document.getElementById('selectedInfo').textContent = `obj ${sim.selectedObject.type} rot=${sim.selectedObject.rotation}°`;
-    draw();
-    schedulePathfinding();
-    return;
-  }
-  if (!sim.selectedTile) return;
-  pushArenaUndo();
-  sim.selectedTile.rotation = norm(sim.selectedTile.rotation);
-  document.getElementById('selectedInfo').textContent = `${sim.selectedTile.type} rot=${sim.selectedTile.rotation}°`;
-  draw();
-  schedulePathfinding();
+  _rotateSelected(sim, dir, { draw, schedulePathfinding });
 }
 function mirrorSelected(axis) {
-  // Espelhamento só no Modo Custom (evita incompatibilidade com o app oficial)
-  if (!sim.customMode) {
-    logUI({
-      t: 0,
-      msg: 'Espelhamento bloqueado. Ative o Modo Custom em Backup & dados para usar.',
-      category: 'warning'
-    });
-    updateMirrorUI();
-    return;
-  }
-  if (sim.selectedObject) {
-    pushArenaUndo();
-    if (axis === 'h') sim.selectedObject.mirrorH = !sim.selectedObject.mirrorH;
-    else sim.selectedObject.mirrorV = !sim.selectedObject.mirrorV;
-    draw(); return;
-  }
-  if (!sim.selectedTile) return;
-  // Ladrilhos oficiais: mesmo no modo custom, avisar se ainda quiser espelhar
-  pushArenaUndo();
-  if (axis === 'h') sim.selectedTile.mirrorH = !sim.selectedTile.mirrorH;
-  else sim.selectedTile.mirrorV = !sim.selectedTile.mirrorV;
-  draw();
+  _mirrorSelected(sim, axis, { draw, logUI, updateMirrorUI });
 }
 document.getElementById('btnRotate').onclick = rotateSelected;
 document.getElementById('btnMirrorH').onclick = () => mirrorSelected('h');
@@ -2715,12 +2247,7 @@ document.getElementById('btnMirrorV').onclick = () => mirrorSelected('v');
 
 document.getElementById('btnClearArena').onclick = () => {
   if (confirm('Limpar arena?')) {
-    pushArenaUndo();
-    sim.tiles.forEach(t => { t.type = TileType.EMPTY; t.custom = null; t._img = null; t._imgSrc = null; });
-    sim.objects = [];
-    sim.selectedTile = null;
-    sim.selectedObject = null;
-    draw();
+    _clearArena(sim, { draw });
   }
 };
 document.getElementById('btnSaveArena').onclick = () => {
@@ -3074,10 +2601,12 @@ document.getElementById('btnCtorSave').onclick = () => {
 function isTypingTarget(el) {
   if (!el) return false;
   const tag = (el.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  // Qualquer controle de formulário impede atalhos de aba/ferramenta
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button') return true;
   if (el.isContentEditable) return true;
-  // inputs type=range etc. ainda contam; também cobre shadow/custom elements
   if (el.closest && el.closest('[contenteditable="true"]')) return true;
+  // Garante cobertura mesmo se o foco estiver em label associado
+  if (el.closest && el.closest('input, textarea, select, [contenteditable="true"]')) return true;
   return false;
 }
 
@@ -3141,13 +2670,7 @@ window.addEventListener('keydown', e => {
       }
     }
     if (e.key === 'Escape') {
-      sim.selectedTool = null;
-      sim.objectTool = null;
-      sim.markerTool = null;
-      document.querySelectorAll('#tileTools button').forEach(b => b.classList.remove('active-tool'));
-      document.querySelectorAll('#objectTools button').forEach(b => b.classList.remove('active-tool'));
-      document.querySelectorAll('#markerTools button').forEach(b => b.classList.remove('active-tool'));
-      document.getElementById('selectedInfo').textContent = '— (seleção)';
+      _cancelEditorTools(sim);
       e.preventDefault();
     }
   }
@@ -3686,14 +3209,7 @@ document.getElementById('btnObjCtorSave').onclick = () => {
   logUI({ t: 0, msg: `Objeto "${name}" salvo (${points} pts).`, category: 'success' });
 };
 
-// extend ctrl+z for object constructor
-const _oldKey = window.onkeydown;
-window.addEventListener('keydown', e => {
-  if (sim.mode === 'objconstructor' && (e.ctrlKey || e.metaKey)) {
-    if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); undoObjCtor(); }
-    if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); redoObjCtor(); }
-  }
-});
+// (Ctrl+Z/Y para objconstructor já coberto no handler global de keydown)
 
 // load objects library + arena objects (síncrono localStorage; reforçado no bootstrap async)
 try {
@@ -4460,254 +3976,50 @@ if (toggleCustomEl) {
 // ═══════════════════════════════════════════════════════════════
 
 function ensureMapMetaDefaults() {
-  if (!sim.officialMeta) {
-    sim.officialMeta = {
-      name: 'arena',
-      duration: 480,
-      victims: { live: 0, dead: 0 },
-      height: 1,
-      finished: false,
-      tileSet: null,
-      startTile: { x: -1, y: -1, z: -1 },
-      startTile2: { x: -1, y: -1, z: -1 }
-    };
-  }
+  _ensureMapMetaDefaults(sim);
 }
 
 function applyMapMetaToUI() {
-  ensureMapMetaDefaults();
-  const m = sim.officialMeta;
-  const nameEl = document.getElementById('mapName');
-  const durEl = document.getElementById('mapDuration');
-  const durVal = document.getElementById('mapDurationVal');
-  const liveEl = document.getElementById('mapVictimsLive');
-  const deadEl = document.getElementById('mapVictimsDead');
-  const floorsEl = document.getElementById('mapFloors');
-  const floorsVal = document.getElementById('mapFloorsVal');
-  const finEl = document.getElementById('mapFinished');
-  if (nameEl) nameEl.value = m.name || '';
-  if (durEl) {
-    durEl.value = m.duration != null ? m.duration : 480;
-    if (durVal) durVal.textContent = durEl.value;
-  }
-  if (liveEl) liveEl.value = (m.victims && m.victims.live) || 0;
-  if (deadEl) deadEl.value = (m.victims && m.victims.dead) || 0;
-  if (floorsEl) {
-    floorsEl.value = Math.max(1, m.height || 1);
-    if (floorsVal) floorsVal.textContent = floorsEl.value;
-  }
-  if (finEl) finEl.checked = !!m.finished;
-  rebuildFloorButtons();
-  updateMapValidateHint();
+  _applyMapMetaToUI(sim, { rebuildFloorButtons, updateMapValidateHint });
 }
 
 function syncMapMetaFromUI() {
-  ensureMapMetaDefaults();
-  const m = sim.officialMeta;
-  const nameEl = document.getElementById('mapName');
-  const durEl = document.getElementById('mapDuration');
-  const liveEl = document.getElementById('mapVictimsLive');
-  const deadEl = document.getElementById('mapVictimsDead');
-  const floorsEl = document.getElementById('mapFloors');
-  const finEl = document.getElementById('mapFinished');
-  if (nameEl) m.name = nameEl.value || 'arena';
-  if (durEl) m.duration = parseInt(durEl.value, 10) || 480;
-  m.victims = {
-    live: liveEl ? (parseInt(liveEl.value, 10) || 0) : 0,
-    dead: deadEl ? (parseInt(deadEl.value, 10) || 0) : 0
-  };
-  if (floorsEl) m.height = parseInt(floorsEl.value, 10) || 1;
-  if (finEl) m.finished = !!finEl.checked;
-
-  m.startTile = { x: -1, y: -1, z: -1 };
-  m.startTile2 = { x: -1, y: -1, z: -1 };
-  for (const t of sim.tiles || []) {
-    if (t.type === TileType.EMPTY) continue;
-    if (t.markStart || t.type === 'start') {
-      m.startTile = { x: t.gx, y: t.gy, z: t.gz || 0 };
-    }
-    if (t.markStart2) {
-      m.startTile2 = { x: t.gx, y: t.gy, z: t.gz || 0 };
-    }
-  }
-  updateMapValidateHint();
+  _syncMapMetaFromUI(sim);
 }
 
 function updateMapValidateHint() {
-  const hint = document.getElementById('mapValidateHint');
-  if (!hint) return;
-  const m = sim.officialMeta || {};
-  const startTile = (sim.tiles || []).find(t => t.type !== TileType.EMPTY && (t.markStart || t.type === 'start'));
-  const hasStart = !!startTile;
-  const st = hasStart
-    ? `Start @(${startTile.gx},${startTile.gy},z${startTile.gz || 0})`
-    : 'Start: nenhum';
-  if (!hasStart) {
-    hint.textContent = `⚠ ${st}. Use menu de contexto ou painel de propriedades. Andar z=${sim.currentFloor || 0}`;
-    hint.style.color = 'var(--red, #ef4444)';
-  } else if (m.finished) {
-    hint.textContent = `✓ Mapa finalizado · ${st} · z=${sim.currentFloor || 0}`;
-    hint.style.color = 'var(--teal, #14b8a6)';
-  } else {
-    hint.textContent = `✓ ${st} · clique direito = propriedades · z=${sim.currentFloor || 0}`;
-    hint.style.color = '';
-  }
+  _updateMapValidateHint(sim);
 }
 
 function rebuildFloorButtons() {
-  const wrap = document.getElementById('floorButtons');
-  const floorsEl = document.getElementById('mapFloors');
-  if (!wrap) return;
-  const n = floorsEl ? (parseInt(floorsEl.value, 10) || 1) : 1;
-  wrap.innerHTML = '';
-  for (let z = 0; z < n; z++) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.dataset.floor = String(z);
-    btn.textContent = 'Andar ' + z;
-    if ((sim.currentFloor || 0) === z) btn.classList.add('active-tool');
-    btn.onclick = () => setCurrentFloor(z);
-    wrap.appendChild(btn);
-  }
+  _rebuildFloorButtons(sim, { setCurrentFloor });
 }
 
 function setCurrentFloor(z) {
-  sim.currentFloor = z;
-  document.querySelectorAll('#floorButtons button').forEach(b => {
-    b.classList.toggle('active-tool', parseInt(b.dataset.floor, 10) === z);
-  });
-  updateMapValidateHint();
-  draw();
-  logUI({ t: 0, msg: 'Editando andar z=' + z, category: 'info' });
+  _setCurrentFloor(sim, z, { draw, rebuildFloorButtons, updateMapValidateHint });
 }
 
 
-let _ctxTile = null;
-
 function hideTileContextMenu() {
-  const m = document.getElementById('tileContextMenu');
-  if (m) m.classList.add('hidden');
-  _ctxTile = null;
+  _hideTileContextMenu();
 }
 
 function showTileContextMenu(clientX, clientY, tile) {
-  const menu = document.getElementById('tileContextMenu');
-  if (!menu) return;
-  _ctxTile = tile;
-  menu.classList.remove('hidden');
-  const pad = 8;
-  let x = clientX;
-  let y = clientY;
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-  // measure after visible
-  requestAnimationFrame(() => {
-    const r = menu.getBoundingClientRect();
-    if (x + r.width > window.innerWidth - pad) x = window.innerWidth - r.width - pad;
-    if (y + r.height > window.innerHeight - pad) y = window.innerHeight - r.height - pad;
-    if (x < pad) x = pad;
-    if (y < pad) y = pad;
-    menu.style.left = x + 'px';
-    menu.style.top = y + 'px';
-  });
+  _showTileContextMenu(clientX, clientY, tile);
 }
 
 function fillTilePropsPanel(tile) {
-  const body = document.getElementById('tilePropBody');
-  const pos = document.getElementById('tilePropPos');
-  if (!body || !pos) return;
-  if (!tile || tile.type === TileType.EMPTY) {
-    pos.textContent = 'Nenhum ladrilho selecionado. Clique direito → Propriedades.';
-    body.classList.remove('is-active');
-    body.style.opacity = '0.5';
-    body.style.pointerEvents = 'none';
-    return;
-  }
-  sim.selectedTile = tile;
-  body.classList.add('is-active');
-  body.style.opacity = '1';
-  body.style.pointerEvents = 'auto';
-  pos.textContent = `x=${tile.gx}, y=${tile.gy}, z=${tile.gz || 0} · ${tile.type}` +
-    (tile.opts && tile.opts.officialImage ? ` · ${tile.opts.officialImage}` : '') +
-    ` · rot ${tile.rotation || 0}°`;
-
-  const opts = tile.opts || {};
-  document.getElementById('propBumpVal').textContent = String(opts.speedbumps || 0);
-  document.getElementById('propObstVal').textContent = String(opts.obstacles || 0);
-  document.getElementById('propRamp').checked = !!opts.rampPoints;
-  document.getElementById('propCheckpoint').checked = !!tile.markCheckpoint;
-  document.getElementById('propStart').checked = !!tile.markStart;
-  document.getElementById('propStart2').checked = !!tile.markStart2;
-
-  const setRadio = (name, val) => {
-    document.querySelectorAll('input[name="' + name + '"]').forEach(n => {
-      n.checked = (val && n.value === val) || (!val && n.value === '');
-    });
-  };
-  setRadio('levelDown', opts.levelDown || '');
-  setRadio('levelUp', opts.levelUp || '');
-  updateCheckpointAvailability();
+  _fillTilePropsPanel(sim, tile, { updateCheckpointAvailability });
 }
 
 function updateCheckpointAvailability() {
-  const wrap = document.getElementById('propCpWrap');
-  const cp = document.getElementById('propCheckpoint');
-  const tile = sim.selectedTile;
-  if (!wrap || !cp || !tile) return;
-  const opts = tile.opts || {};
-  const bump = parseInt(document.getElementById('propBumpVal').textContent, 10) || 0;
-  const obst = parseInt(document.getElementById('propObstVal').textContent, 10) || 0;
-  const ramp = document.getElementById('propRamp').checked;
-  const gaps = opts.officialGaps || 0;
-  const seesaw = opts.officialSeesaw || 0;
-  const inter = opts.officialIntersections || 0;
-  const blocked = bump > 0 || obst > 0 || ramp || gaps > 0 || seesaw > 0 || inter > 0 ||
-    tile.type === 'gap' || tile.type === 'gangorra' ||
-    tile.type === 'intersection' || tile.type === 'intersection_t';
-  cp.disabled = blocked;
-  wrap.style.opacity = blocked ? '0.45' : '1';
-  if (blocked) cp.checked = false;
+  _updateCheckpointAvailability(sim);
 }
 
 function applyTilePropsFromPanel() {
-  const tile = sim.selectedTile;
-  if (!tile || tile.type === TileType.EMPTY) return;
-  pushArenaUndo();
-  if (!tile.opts) tile.opts = {};
-  const bump = parseInt(document.getElementById('propBumpVal').textContent, 10) || 0;
-  const obst = parseInt(document.getElementById('propObstVal').textContent, 10) || 0;
-  tile.opts.speedbumps = bump;
-  tile.opts.obstacles = obst;
-  tile.opts.rampPoints = document.getElementById('propRamp').checked;
-  const ld = document.querySelector('input[name="levelDown"]:checked');
-  const lu = document.querySelector('input[name="levelUp"]:checked');
-  tile.opts.levelDown = ld && ld.value ? ld.value : undefined;
-  tile.opts.levelUp = lu && lu.value ? lu.value : undefined;
-
-  const wantStart = document.getElementById('propStart').checked;
-  if (wantStart) {
-    (sim.tiles || []).forEach(tt => { if (tt !== tile) tt.markStart = false; });
-    tile.markStart = true;
-  } else tile.markStart = false;
-  tile.markStart2 = document.getElementById('propStart2').checked;
-  tile.markCheckpoint = !document.getElementById('propCheckpoint').disabled &&
-    document.getElementById('propCheckpoint').checked;
-
-  const z = tile.gz || 0;
-  sim.objects = (sim.objects || []).filter(o =>
-    !(o.gx === tile.gx && o.gy === tile.gy && (o.gz || 0) === z &&
-      (o.type === 'obstacle' || o.type === 'lombada')));
-  for (let i = 0; i < obst; i++) {
-    sim.objects.push({ gx: tile.gx, gy: tile.gy, gz: z, type: 'obstacle', rotation: 0, points: 20 });
-  }
-  for (let i = 0; i < bump; i++) {
-    sim.objects.push({ gx: tile.gx, gy: tile.gy, gz: z, type: 'lombada', rotation: 0, points: 10 });
-  }
-  if (typeof syncMapMetaFromUI === 'function') syncMapMetaFromUI();
-  fillTilePropsPanel(tile);
-  draw();
-  schedulePathfinding();
-  logUI({ t: 0, msg: `Propriedades aplicadas @${tile.gx},${tile.gy},z${z}`, category: 'info' });
+  _applyTilePropsFromPanel(sim, {
+    draw, schedulePathfinding, logUI, syncMapMetaFromUI, fillTilePropsPanel
+  });
 }
 
 function wireTileContextMenu() {
@@ -4720,7 +4032,7 @@ function wireTileContextMenu() {
       e.preventDefault();
       e.stopPropagation();
       const action = btn.dataset.ctx;
-      const tile = _ctxTile || sim.selectedTile;
+      const tile = getContextTile() || sim.selectedTile;
       hideTileContextMenu();
       if (!tile || tile.type === TileType.EMPTY) return;
       sim.selectedTile = tile;
@@ -4862,73 +4174,29 @@ try { wireMapMetaUI(); wireTilePropsPanel(); } catch (err) { console.error('wire
 
 
 // ─── Preview visual ao arrastar ladrilho ─────────────────────
-let _dragPayload = null;
 
 function showTileDragPreview(clientX, clientY, payload, invalid) {
-  const el = document.getElementById('tileDragPreview');
-  const cnv = document.getElementById('tileDragPreviewCanvas');
-  if (!el || !cnv) return;
-  el.classList.remove('hidden');
-  el.classList.toggle('is-invalid', !!invalid);
-  el.style.left = clientX + 'px';
-  el.style.top = clientY + 'px';
-  paintDragPreview(cnv, payload);
+  _showTileDragPreview(clientX, clientY, payload, invalid, {
+    paintDragPreview: (cnv, p) => paintDragPreview(cnv, p)
+  });
 }
 
 function hideTileDragPreview() {
-  const el = document.getElementById('tileDragPreview');
-  if (el) el.classList.add('hidden');
-  _dragPayload = null;
+  _hideTileDragPreview();
 }
 
 function paintDragPreview(cnv, payload) {
-  if (!payload || !cnv) return;
-  const ctx = cnv.getContext('2d');
-  ctx.clearRect(0, 0, cnv.width, cnv.height);
-  ctx.fillStyle = '#1a2332';
-  ctx.fillRect(0, 0, cnv.width, cnv.height);
-
-  if (payload.kind === 'official' && payload.file) {
-    const img = getCachedOfficialImage(payload.file);
-    if (img && img.complete && img.naturalWidth) {
-      ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
-    } else if (img) {
-      img.onload = () => {
-        ctx.clearRect(0, 0, cnv.width, cnv.height);
-        ctx.fillStyle = '#1a2332';
-        ctx.fillRect(0, 0, cnv.width, cnv.height);
-        ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
-      };
-    }
-    return;
-  }
-  if (payload.kind === 'custom' && payload.idx != null && sim.customLibrary[payload.idx]) {
-    renderTilePreviewToCanvas(cnv, 'custom', sim.customLibrary[payload.idx]);
-    return;
-  }
-  if (payload.kind === 'builtin' && payload.type) {
-    renderTilePreviewToCanvas(cnv, payload.type, null);
-    return;
-  }
-  if (payload.kind === 'move' && payload.tile) {
-    const t = payload.tile;
-    if (t.opts && t.opts.officialImage) {
-      const img = getCachedOfficialImage(t.opts.officialImage);
-      if (img && img.complete) ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
-      else if (img) img.onload = () => ctx.drawImage(img, 2, 2, cnv.width - 4, cnv.height - 4);
-    } else if (t.type === TileType.CUSTOM && t.custom) {
-      renderTilePreviewToCanvas(cnv, 'custom', t.custom);
-    } else {
-      renderTilePreviewToCanvas(cnv, t.type, null);
-    }
-  }
+  _paintDragPreview(cnv, payload, {
+    getCachedOfficialImage,
+    renderTilePreviewToCanvas,
+    customLibrary: sim.customLibrary
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
 // Drag & drop paleta ↔ grade + pathfinding automático
 // ═══════════════════════════════════════════════════════════════
 
-let _dragMoveFrom = null; // { gx, gy, gz } quando arrasta tile da grade
 let _pathfindTimer = null;
 
 function schedulePathfinding() {
@@ -4979,119 +4247,18 @@ function runPathfinding() {
 }
 
 function placeTileAt(gx, gy, payload) {
-  if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) return false;
-  const z = sim.currentFloor || 0;
-  let tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z);
-  if (!tile) {
-    tile = sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  }
-  if (!tile) {
-    tile = new Tile(gx, gy);
-    tile.gz = z;
-    sim.tiles.push(tile);
-  }
-  pushArenaUndo();
-  tile.gz = z;
-
-  if (payload.kind === 'official') {
-    const file = payload.file;
-    const entry = (sim.officialTileFiles || []).find(x => x.file === file);
-    const type = (entry && entry.type) || classifyOfficialFilename(file);
-    tile.type = type;
-    tile.custom = null;
-    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-    tile.rotation = tile.rotation || 0;
-    tile.mirrorH = false;
-    tile.mirrorV = false;
-    tile.opts = {
-      ...(tile.opts || {}),
-      officialImage: file,
-      officialId: file.replace(/\.png$/i, ''),
-      fromOfficialPalette: true
-    };
-    if (type === 'rescue_exit') tile.markFinish = true;
-    sim.selectedTool = 'official';
-    sim.placingOfficialFile = file;
-  } else if (payload.kind === 'custom') {
-    if (!sim.customMode) {
-      logUI({ t: 0, msg: 'Modo oficial: personalizados bloqueados.', category: 'warning' });
-      return false;
-    }
-    const cid = payload.idx;
-    if (cid == null || !sim.customLibrary[cid]) return false;
-    tile.type = TileType.CUSTOM;
-    tile.custom = JSON.parse(JSON.stringify(sim.customLibrary[cid]));
-    tile.custom._instanceId = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-    tile.opts = tile.opts || {};
-  } else if (payload.kind === 'builtin') {
-    tile.type = payload.type;
-    tile.custom = null;
-    tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-    tile.opts = payload.type === 'intersection' ? { hasGreen: true } : {};
-  } else if (payload.kind === 'move') {
-    // handled separately
-    return false;
-  }
-  sim.selectedTile = tile;
-  document.getElementById('selectedInfo').textContent =
-    `${tile.type} @${gx},${gy},z${z}`;
-  draw();
-  schedulePathfinding();
-  fillTilePropsPanel(tile);
-  // Sem Shift: desarma a ferramenta após uma colocação
-  if (!sim.shiftDown) clearTileSelection();
-  return true;
+  return _placeTileAt(sim, gx, gy, payload, {
+    draw, schedulePathfinding, fillTilePropsPanel, clearTileSelection, logUI,
+    classifyOfficialFilename
+  });
 }
 
 function clearTileAt(gx, gy, gz) {
-  const z = gz != null ? gz : (sim.currentFloor || 0);
-  const tile = sim.tiles.find(t => t.gx === gx && t.gy === gy && (t.gz || 0) === z)
-    || sim.tiles.find(t => t.gx === gx && t.gy === gy);
-  if (!tile || tile.type === TileType.EMPTY) return;
-  pushArenaUndo();
-  tile.type = TileType.EMPTY;
-  tile.custom = null;
-  tile._img = null; tile._imgSrc = null; tile._imgToken = null;
-  tile.opts = {};
-  tile.markStart = false; tile.markStart2 = false;
-  tile.markFinish = false; tile.markCheckpoint = false;
-  tile.rotation = 0;
-  sim.objects = (sim.objects || []).filter(o => !(o.gx === gx && o.gy === gy && (o.gz || 0) === z));
-  if (sim.selectedTile === tile) sim.selectedTile = null;
-  draw();
-  schedulePathfinding();
+  _clearTileAt(sim, gx, gy, gz, { draw, schedulePathfinding });
 }
 
 function moveTile(from, toGx, toGy) {
-  if (from.gx === toGx && from.gy === toGy) return;
-  const z = from.gz || 0;
-  const src = sim.tiles.find(t => t.gx === from.gx && t.gy === from.gy && (t.gz || 0) === z);
-  if (!src || src.type === TileType.EMPTY) return;
-  pushArenaUndo();
-  let dst = sim.tiles.find(t => t.gx === toGx && t.gy === toGy && (t.gz || 0) === z);
-  if (!dst) {
-    dst = new Tile(toGx, toGy);
-    dst.gz = z;
-    sim.tiles.push(dst);
-  }
-  // swap contents
-  const fields = ['type', 'custom', 'rotation', 'mirrorH', 'mirrorV', 'opts',
-    'markStart', 'markStart2', 'markFinish', 'markCheckpoint', '_img', '_imgSrc', '_imgToken'];
-  const tmp = {};
-  for (const f of fields) tmp[f] = dst[f];
-  for (const f of fields) dst[f] = src[f];
-  for (const f of fields) src[f] = (f === 'type' ? TileType.EMPTY : (f === 'opts' ? {} : (f.startsWith('mark') ? false : (f === 'rotation' ? 0 : null))));
-  src.mirrorH = false; src.mirrorV = false;
-  // move objects
-  (sim.objects || []).forEach(o => {
-    if (o.gx === from.gx && o.gy === from.gy && (o.gz || 0) === z) {
-      o.gx = toGx; o.gy = toGy;
-    }
-  });
-  sim.selectedTile = dst;
-  draw();
-  schedulePathfinding();
+  _moveTile(sim, from, toGx, toGy, { draw, schedulePathfinding });
 }
 
 function wireArenaDragDrop() {
@@ -5101,13 +4268,14 @@ function wireArenaDragDrop() {
   canvas.addEventListener('dragover', (e) => {
     if (sim.mode !== 'editor') return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = _dragMoveFrom ? 'move' : 'copy';
+    e.dataTransfer.dropEffect = getDragMoveFrom() ? 'move' : 'copy';
     wrap.classList.add('drag-over');
     const w = screenToWorld(e.clientX, e.clientY);
     const { gx, gy } = worldToGrid(w.x, w.y);
     const invalid = gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH;
-    if (_dragPayload || _dragMoveFrom) {
-      const payload = _dragPayload || (_dragMoveFrom ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dragMoveFrom.gx && t.gy === _dragMoveFrom.gy) } : null);
+    if (getDragPayload() || getDragMoveFrom()) {
+      const _dmf = getDragMoveFrom();
+      const payload = getDragPayload() || (_dmf ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dmf.gx && t.gy === _dmf.gy) } : null);
       if (payload) showTileDragPreview(e.clientX, e.clientY, payload, invalid);
     }
   });
@@ -5116,13 +4284,14 @@ function wireArenaDragDrop() {
   });
   // preview follows globally during HTML5 drag
   document.addEventListener('dragover', (e) => {
-    if (!_dragPayload && !_dragMoveFrom) return;
-    const payload = _dragPayload || (_dragMoveFrom ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dragMoveFrom.gx && t.gy === _dragMoveFrom.gy) } : null);
+    if (!getDragPayload() && !getDragMoveFrom()) return;
+    const _dmf = getDragMoveFrom();
+      const payload = getDragPayload() || (_dmf ? { kind: 'move', tile: sim.tiles.find(t => t.gx === _dmf.gx && t.gy === _dmf.gy) } : null);
     if (payload) showTileDragPreview(e.clientX, e.clientY, payload, false);
   });
   document.addEventListener('dragend', () => {
     hideTileDragPreview();
-    _dragMoveFrom = null;
+    setDragMoveFrom(null);
   });
   canvas.addEventListener('drop', (e) => {
     if (sim.mode !== 'editor') return;
@@ -5133,9 +4302,9 @@ function wireArenaDragDrop() {
     const { gx, gy } = worldToGrid(w.x, w.y);
 
     // Move from grid?
-    if (_dragMoveFrom) {
-      const from = _dragMoveFrom;
-      _dragMoveFrom = null;
+    if (getDragMoveFrom()) {
+      const from = getDragMoveFrom();
+      setDragMoveFrom(null);
       if (gx < 0 || gy < 0 || gx >= sim.gridW || gy >= sim.gridH) {
         // soltar fora = remover
         clearTileAt(from.gx, from.gy, from.gz);
@@ -5176,9 +4345,9 @@ function wireArenaDragDrop() {
     const dist = Math.hypot(e.clientX - moveDrag.startX, e.clientY - moveDrag.startY);
     if (!moveDrag.active && dist > 8) {
       moveDrag.active = true;
-      _dragMoveFrom = { gx: moveDrag.gx, gy: moveDrag.gy, gz: moveDrag.gz };
+      setDragMoveFrom({ gx: moveDrag.gx, gy: moveDrag.gy, gz: moveDrag.gz });
       const tile = sim.tiles.find(t => t.gx === moveDrag.gx && t.gy === moveDrag.gy && (t.gz || 0) === (moveDrag.gz || 0));
-      _dragPayload = { kind: 'move', tile };
+      setDragPayload({ kind: 'move', tile });
       canvas.style.cursor = 'grabbing';
     }
     if (moveDrag.active) {
@@ -5196,13 +4365,13 @@ function wireArenaDragDrop() {
     canvas.style.cursor = '';
     hideTileDragPreview();
     if (!was.active) {
-      _dragMoveFrom = null;
+      setDragMoveFrom(null);
       return;
     }
     const w = screenToWorld(e.clientX, e.clientY);
     const { gx, gy } = worldToGrid(w.x, w.y);
     const from = { gx: was.gx, gy: was.gy, gz: was.gz };
-    _dragMoveFrom = null;
+    setDragMoveFrom(null);
     // drop outside canvas or invalid = remove (drag-out)
     const rect = canvas.getBoundingClientRect();
     const outside = e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom;
@@ -5222,9 +4391,10 @@ function wireArenaDragDrop() {
     el.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
     el.addEventListener('drop', (e) => {
       e.preventDefault();
-      if (_dragMoveFrom) {
-        clearTileAt(_dragMoveFrom.gx, _dragMoveFrom.gy, _dragMoveFrom.gz);
-        _dragMoveFrom = null;
+      if (getDragMoveFrom()) {
+        const _df = getDragMoveFrom();
+        clearTileAt(_df.gx, _df.gy, _df.gz);
+        setDragMoveFrom(null);
       }
     });
   });

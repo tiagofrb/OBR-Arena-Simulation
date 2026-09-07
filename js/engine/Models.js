@@ -1,7 +1,7 @@
 /** Modelos base: Vec, Tile, Robot, constantes */
 
-export const TILE_PX = 72;
-export const LINE_W = 4;
+import { TILE_PX, LINE_W } from '../core/constants.js';
+export { TILE_PX, LINE_W };
 
 export class Vec {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }

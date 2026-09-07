@@ -45,17 +45,35 @@ Não requer instalação, build ou dependências externas — roda direto no nav
 ├── css/
 │   └── style.css
 ├── js/
-│   ├── main.js                    # lógica principal, UI, eventos
+│   ├── main.js                    # orquestração UI, eventos, estado sim
+│   ├── core/
+│   │   └── constants.js           # constantes nomeadas (grid, câmera, storage…)
+│   ├── editor/
+│   │   ├── ArenaHistory.js        # undo/redo da arena
+│   │   ├── GridManager.js         # redimensionamento e matriz da grade
+│   │   ├── TileOperations.js      # place / clear / move / rotate / mirror
+│   │   ├── EditorTools.js         # seleção de ferramenta e marcadores
+│   │   ├── MapMeta.js             # metadados do mapa e andares
+│   │   ├── TileProps.js           # propriedades e menu de contexto
+│   │   └── EditorDragDrop.js      # preview e estado de drag-and-drop
+│   ├── render/
+│   │   ├── Camera.js              # fit / zoom / pan / conversões
+│   │   └── ArenaRenderer.js       # pipeline de desenho (incl. sprite do robô)
 │   ├── engine/
-│   │   ├── Models.js               # Tile, Robot, Vec, TileType
-│   │   └── ScoreEngine.js          # regras de pontuação OBR
+│   │   ├── Models.js              # Tile, Robot, Vec, TileType
+│   │   └── ScoreEngine.js         # regras de pontuação OBR
 │   ├── io/
-│   │   ├── officialTileClassifier.js   # classifica ladrilhos do formato oficial
-│   │   └── officialArenaAdapter.js     # converte arenas do formato oficial
+│   │   ├── officialTileClassifier.js
+│   │   ├── officialArenaAdapter.js
+│   │   └── pathFinder.js
 │   └── storage/
-│       └── DataManager.js          # persistência (localStorage + IndexedDB)
+│       └── DataManager.js
+├── docs/
+│   └── architecture.md            # decisões técnicas e roadmap de módulos
+├── AGENTS.md                      # diretrizes de código para contribuidores/LLMs
+├── CHANGELOG.md
 └── assets/
-    └── official-tiles/             # imagens do catálogo oficial OBR
+    └── official-tiles/
 ```
 
 ## Persistência de dados
@@ -64,6 +82,9 @@ Todos os dados (ladrilhos, arenas, objetos e robôs personalizados) são salvos 
 
 ## Histórico de versões
 
+Veja o [CHANGELOG.md](CHANGELOG.md) completo.
+
+- **v0.01+ (unreleased)** — Extração modular do editor de arena (histórico, grade, câmera), constantes nomeadas, correção de atalhos de teclado em inputs
 - **v0.01** — Catálogo de ladrilhos oficiais OBR, modo custom, backup/restauração completa de dados, migração de persistência para IndexedDB
 - **v0.00** — Reestruturação completa da interface ("console de arbitragem"): navegação por abas, paleta unificada de ladrilhos, preview em hover, painel de ajuda integrado
 
