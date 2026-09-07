@@ -1,15 +1,17 @@
 # Features — OBR Arena Simulation
 
-Inventário de funcionalidades do programa.
+Inventário do que o **aplicativo precisa ter funcionando**.
 
-**Legenda das caixas:** o checkbox indica **cobertura por testes unitários**, não se a feature existe no app.
+**Legenda das caixas:** indica se a feature está **implementada e operacional** no app (não cobertura de testes).
 
-- `[ ]` planejado (sem testes unitários ainda)
-- `[x]` coberto por testes unitários
+- `[ ]` ainda não verificada / incompleta / não confiável
+- `[x]` implementada, verificada e funcionando como deve na versão atual
 
-Não iniciar implementação de testes até nova instrução.
+Cobertura por testes unitários é rastreador em **`docs/unit-tests-plan.md`** — documento separado.
 
-Modularização pendente (fora do editor): ver `docs/modularization-plan.md`.
+Modularização estrutural: ver `docs/modularization-plan.md` e `docs/architecture.md`.
+
+Todas as caixas começam desmarcadas: a verificação de que cada item funciona (e como ficará na versão final) será feita depois, item a item.
 
 ---
 
@@ -78,6 +80,11 @@ Modularização pendente (fora do editor): ver `docs/modularization-plan.md`.
 - [ ] `js/editor/MapMeta.js`
 - [ ] `js/editor/TileProps.js`
 - [ ] `js/editor/EditorDragDrop.js`
+- [ ] `js/editor/TilePalette.js`
+- [ ] `js/editor/OfficialCatalog.js`
+- [ ] `js/editor/EditorInput.js`
+- [ ] `js/editor/ArenaIO.js`
+- [ ] `js/editor/CustomMode.js`
 - [ ] `js/render/Camera.js`
 - [ ] `js/render/ArenaRenderer.js`
 - [ ] `js/core/constants.js`
@@ -188,36 +195,22 @@ Modularização pendente (fora do editor): ver `docs/modularization-plan.md`.
 - [ ] docs/architecture.md
 - [ ] PROGRESS.md
 - [ ] FEATURES.md (este arquivo)
+- [ ] docs/unit-tests-plan.md (plano de testes unitários)
 - [ ] Suite de testes unitários automatizados
 - [ ] CI (GitHub Actions) rodando testes
 
 ---
 
-## 12. Itens futuros (também sem testes)
+## 12. Itens futuros
 
-- [ ] Build com npm/webpack/TypeScript
+- [ ] Build com npm/webpack/TypeScript no runtime do app
 - [ ] Backend / conta de usuário / sync em nuvem
 - [ ] Física realista completa do robô
 - [ ] Cobertura total das regras oficiais OBR 2026 no `ScoreEngine`
 - [ ] Multiplayer / arbitragem em rede
 - [ ] App nativo (Electron etc.)
+- [ ] Multi-andar completo (pathfinding, eventos e UI por floor)
 
 ---
 
-## Ordem sugerida para testes unitários
-
-1. `js/core/constants.js`
-2. `js/engine/Models.js`
-3. `js/engine/ScoreEngine.js`
-4. `js/editor/GridManager.js`
-5. `js/editor/ArenaHistory.js`
-6. `js/editor/TileOperations.js`
-7. `js/editor/MapMeta.js`
-8. `js/io/officialTileClassifier.js`
-9. `js/io/pathFinder.js` / `officialArenaAdapter.js`
-10. `js/render/Camera.js`
-11. `DataManager` e trechos de UI (depois)
-
----
-
-*As caixas serão marcadas `[x]` somente quando houver testes unitários correspondentes.*
+*Marcar `[x]` só após verificar que o item funciona como deve. Testes unitários: `docs/unit-tests-plan.md`.*

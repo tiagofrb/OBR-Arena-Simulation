@@ -2,7 +2,7 @@
 
 Documento de trabalho para extrair o restante de `js/main.js` em módulos ES, no mesmo estilo do editor de arena. Não é um guia de uso (isso fica no README).
 
-**Fora deste plano:** suite de testes automatizados e CI — `FEATURES.md` pede para não iniciar testes até nova instrução. Os módulos novos devem nascer **testáveis** (estado e `deps` injetados), mas sem escrever a suíte agora.
+**Fora deste plano:** suite de testes automatizados e CI — ver `docs/unit-tests-plan.md` (inventário de features + plano de cobertura). Os módulos novos devem nascer **testáveis** (estado e `deps` injetados); a implementação da suíte segue aquele documento, não este.
 
 **Fora deste plano:** bundler, TypeScript, split de CSS, backend.
 
