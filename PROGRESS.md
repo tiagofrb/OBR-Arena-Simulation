@@ -81,6 +81,11 @@ Próximos passos sugeridos (editor):
 - `js/constructors/TileConstructor.js`, `ObjectConstructor.js`
 - `main.js` ~2,0k linhas
 
-### Próximo — resto da modularização
+### Parte 11 — Construtor de robô (Fase 6) ✅
 
-Roteiro em `docs/modularization-plan.md`: Fase 6 (robô) → limpeza residual.
+- `js/constructors/RobotConstructor.js`
+- `main.js` ~1,6k linhas
+
+### Próximo
+
+Fase 7 opcional (`createSessionState`). Checklist de pronto do plano: main só bootstrap + `sim`.

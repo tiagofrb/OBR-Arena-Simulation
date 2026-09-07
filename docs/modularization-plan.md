@@ -172,15 +172,15 @@ Constantes: `CTOR_GRID_CELLS`, `CTOR_TILE_CANVAS_MM`, `CTOR_HISTORY_MAX`.
 
 `main.js` mantém wrappers finos + `ctor` / `objCtor` para o teclado.
 
-### Fase 6 — Construtor de robô
+### Fase 6 — Construtor de robô ✅
 
 Não usa o paint buffer (corpo + detectores, não pixels).
 
 | Módulo | Conteúdo |
 |--------|----------|
-| `constructors/RobotConstructor.js` | `defaultRobotDef`, canvas, hit-test, lista/edição de detectores, salvar/aplicar na biblioteca |
+| `constructors/RobotConstructor.js` | `defaultRobotDef`, canvas, hit-test, lista/edição de detectores, salvar/aplicar |
 
-Sensores da **simulação** já devem estar na Fase 3; aqui só a UI de definição.
+Sensores da **simulação** ficam em `sim/Sensors.js` (Fase 3); aqui só a UI de definição.
 
 ### Fase 7 — Estado `sim` (opcional, por último)
 

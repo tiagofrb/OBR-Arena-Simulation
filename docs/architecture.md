@@ -13,7 +13,7 @@ Principais camadas:
 | UI / orquestração | `js/main.js` | Bootstrap, estado `sim`, wiring restante (construtores) |
 | Simulação | `js/sim/*` | Cenários, update, path/manual/script, sensores |
 | Paint (ctors) | `js/constructors/paint/*` | Buffer/undo e câmera compartilhados |
-| Construtores | `js/constructors/TileConstructor.js`, `ObjectConstructor.js` | UI/paint tile e objeto |
+| Construtores | `js/constructors/{Tile,Object,Robot}Constructor.js` | UI tile, objeto e robô |
 | Shell | `js/app/*` | Abas/`setMode`, teclado, game loop |
 | UI placar | `js/ui/ScorePanel.js` | Log de eventos e placar |
 | Core | `js/core/*` | Constantes, persist, typing |
@@ -47,8 +47,8 @@ Módulos extraídos:
 13. **ArenaIO** — export/import JSON e pathfinding agendado.
 14. **CustomMode** — gates de UI do modo custom.
 
-A lógica do editor, shell, simulação, paint e construtores de **ladrilho/objeto** estão extraídos.
-Ainda em `main.js`: construtor de robô (fase 6) e orquestração residual.
+A lógica do editor, shell, simulação, paint e **todos os construtores** estão extraídos.
+`main.js` fica como bootstrap + estado `sim` + wrappers (fase 7 opcional).
 O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.md).
 
 ## Convenções
@@ -59,6 +59,6 @@ O roteiro completo está em [`docs/modularization-plan.md`](modularization-plan.
 
 ## Limitações conhecidas
 
-- `main.js` ainda é grande (~2,0k linhas); fases 0–5 concluídas; extração segue `docs/modularization-plan.md`.
+- `main.js` ~1,6k linhas; fases 0–6 concluídas; fase 7 (session state) opcional.
 - Multi-floor (gz) está parcialmente implementado; pathfinding e alguns fluxos assumem floor 0.
 - Não há suite de testes automatizados ainda — módulos novos devem ser escritos de forma testável.
