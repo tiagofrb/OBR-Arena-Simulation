@@ -71,6 +71,11 @@ Próximos passos sugeridos (editor):
 - `js/sim/Scenarios.js`, `Simulation.js`, `ManualControl.js`, `Sensors.js`, `RobotScript.js`
 - `main.js` ~3,1k linhas
 
+### Parte 9 — Paint compartilhado (Fase 4) ✅
+
+- `js/constructors/paint/PaintBuffer.js`, `CtorCamera.js`
+- `main.js` ~2,9k linhas
+
 ### Próximo — resto da modularização
 
-Roteiro em `docs/modularization-plan.md`: Fase 4 (paint compartilhado) → Fase 5–6 (construtores).
+Roteiro em `docs/modularization-plan.md`: Fase 5–6 (construtores tile/obj/robô).

@@ -14,7 +14,8 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
   - `js/ui/ScorePanel.js`
   - `js/editor/TilePalette.js`, `OfficialCatalog.js`, `EditorInput.js`, `ArenaIO.js`, `CustomMode.js`
   - `js/sim/Scenarios.js`, `Simulation.js`, `ManualControl.js`, `Sensors.js`, `RobotScript.js`
-  - Constantes de movimento: `MANUAL_LINEAR_SPEED`, `MANUAL_ANGULAR_SPEED`, `PATH_FOLLOW_SPEED`, `PATH_WAYPOINT_EPSILON`
+  - `js/constructors/paint/PaintBuffer.js`, `CtorCamera.js`
+  - Constantes: movimento + `CTOR_GRID_CELLS`, `CTOR_TILE_CANVAS_MM`, `CTOR_HISTORY_MAX`
 - `docs/modularization-plan.md` — plano para extrair o restante de `main.js` (shell, editor UI, simulação, construtores)
 - Módulos do editor de arena:
   - `js/editor/ArenaHistory.js` — undo/redo
@@ -31,7 +32,7 @@ e o projeto adere a [SemVer](https://semver.org/lang/pt-BR/).
 - `AGENTS.md`, `docs/architecture.md`
 
 ### Changed
-- `main.js` delega shell, editor UI/I/O e simulação aos módulos `app/` / `ui/` / `core/` / `editor/` / `sim/`
+- `main.js` delega shell, editor, simulação e paint dos construtores aos módulos extraídos
 - `docs/architecture.md` atualizado com camadas shell e core
 - `docs/architecture.md` aponta o plano de modularização; lista MapMeta / TileProps / EditorDragDrop como já extraídos
 - `main.js` delega histórico, grade, câmera, operações de tile, ferramentas e render aos módulos

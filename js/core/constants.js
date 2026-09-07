@@ -18,6 +18,15 @@ export const MM_TO_WORLD = TILE_PX / TILE_MM;
 /** Dimensão padrão do construtor (canvas 300×300 mm, 1 px = 1 mm). */
 export const CTOR_SIZE_MM = 300;
 
+/** Construtor de ladrilho: grade 3×3 células (contexto vizinho + centro). */
+export const CTOR_GRID_CELLS = 3;
+
+/** Tamanho do buffer do construtor de ladrilho em mm (3×300). */
+export const CTOR_TILE_CANVAS_MM = CTOR_SIZE_MM * CTOR_GRID_CELLS;
+
+/** Histórico de undo dos construtores (tile/objeto). */
+export const CTOR_HISTORY_MAX = 40;
+
 /** Padding da câmera ao encaixar a arena (px CSS). */
 export const CAMERA_FIT_PAD = 24;
 

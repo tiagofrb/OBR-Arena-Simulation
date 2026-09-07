@@ -33,7 +33,11 @@ import {
   MANUAL_LINEAR_SPEED,
   MANUAL_ANGULAR_SPEED,
   PATH_FOLLOW_SPEED,
-  PATH_WAYPOINT_EPSILON
+  PATH_WAYPOINT_EPSILON,
+  CTOR_SIZE_MM,
+  CTOR_GRID_CELLS,
+  CTOR_TILE_CANVAS_MM,
+  CTOR_HISTORY_MAX
 } from './core/constants.js';
 import {
   snapshotArena as _snapshotArena,
@@ -169,7 +173,26 @@ import {
   runRobotScript as _runRobotScript,
   wireRobotScriptUI
 } from './sim/RobotScript.js';
-
+import {
+  initPaintBuffer,
+  clearPaintBuffer,
+  pushPaintUndo,
+  undoPaint,
+  redoPaint,
+  stampAt as _stampAt,
+  strokeLineOnBuf as _strokeLineOnBuf,
+  paintAt as _paintAtShared,
+  pickColorAt,
+  whiteBg
+} from './constructors/paint/PaintBuffer.js';
+import {
+  fitCtorCamera,
+  setCtorZoom as _setCtorZoomCam,
+  screenToCtorWorld,
+  panCtorCamera,
+  beginCtorPan,
+  endCtorPan
+} from './constructors/paint/CtorCamera.js';
 
 const dataManager = new DataManager();
 
@@ -527,9 +550,9 @@ function setMode(mode) {
 // wired in wireEditorCanvas() after helper defs exist
 
 // ─── Constructor pixel 3×3 (centro 300×300 mm, 1px=1mm) + grid lock ─
-const CELL_MM = 300;          // um ladrilho
-const GRID_CELLS = 3;         // 3×3
-const CANVAS_MM = CELL_MM * GRID_CELLS; // 900
+const CELL_MM = CTOR_SIZE_MM;
+const GRID_CELLS = CTOR_GRID_CELLS;
+const CANVAS_MM = CTOR_TILE_CANVAS_MM;
 const ctor = {
   tool: 'paint',
   color: '#000000',
@@ -548,7 +571,7 @@ const ctor = {
   // undo / redo
   undoStack: [],
   redoStack: [],
-  maxHistory: 40,
+  maxHistory: CTOR_HISTORY_MAX,
   strokeSaved: false,
   cursorX: null,
   cursorY: null,
@@ -561,21 +584,11 @@ const ctorCanvas = document.getElementById('ctorCanvas');
 const ctorCtx = ctorCanvas.getContext('2d');
 
 function initCtorBuffer() {
-  const c = document.createElement('canvas');
-  c.width = CANVAS_MM;
-  c.height = CANVAS_MM;
-  ctor.buf = c;
-  ctor.bufCtx = c.getContext('2d');
-  clearCtorBuffer();
+  initPaintBuffer(ctor, CANVAS_MM);
 }
 
 function clearCtorBuffer() {
-  const ctx = ctor.bufCtx;
-  // Fundo padrão branco em todo o canvas 3×3 (centro = ladrilho)
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, CANVAS_MM, CANVAS_MM);
-  ctor.undoStack = [];
-  ctor.redoStack = [];
+  clearPaintBuffer(ctor, CANVAS_MM);
 }
 
 function openConstructorTab() {
@@ -614,35 +627,11 @@ function closeConstructorTab() {
 }
 
 function fitCtorCanvas() {
-  const wrap = document.getElementById('canvasWrap');
-  const r = wrap.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = Math.max(200, r.width - 16);
-  const cssH = Math.max(200, r.height - 16);
-  ctorCanvas.style.width = cssW + 'px';
-  ctorCanvas.style.height = cssH + 'px';
-  ctorCanvas.width = Math.floor(cssW * dpr);
-  ctorCanvas.height = Math.floor(cssH * dpr);
-  ctorCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  // fit 900mm world into view
-  const pad = 20;
-  const sx = (cssW - pad * 2) / CANVAS_MM;
-  const sy = (cssH - pad * 2) / CANVAS_MM;
-  ctor.scale = Math.min(sx, sy, 2);
-  if (ctor.scale < 0.1) ctor.scale = 0.1;
-  ctor.ox = (cssW - CANVAS_MM * ctor.scale) / 2;
-  ctor.oy = (cssH - CANVAS_MM * ctor.scale) / 2;
+  fitCtorCamera(ctorCanvas, ctorCtx, ctor, CANVAS_MM, { pad: 20, maxFit: 2 });
 }
 
 function setCtorZoom(factor) {
-  const cssW = ctorCanvas.clientWidth;
-  const cssH = ctorCanvas.clientHeight;
-  const cx = cssW / 2, cy = cssH / 2;
-  const wx = (cx - ctor.ox) / ctor.scale;
-  const wy = (cy - ctor.oy) / ctor.scale;
-  ctor.scale = Math.max(0.08, Math.min(4, ctor.scale * factor));
-  ctor.ox = cx - wx * ctor.scale;
-  ctor.oy = cy - wy * ctor.scale;
+  _setCtorZoomCam(ctorCanvas, ctor, factor, { min: 0.08, max: 4 });
   drawCtor();
 }
 
@@ -794,160 +783,40 @@ function drawCtor() {
 }
 
 function ctorPos(e) {
-  const rect = ctorCanvas.getBoundingClientRect();
-  const sx = e.clientX - rect.left;
-  const sy = e.clientY - rect.top;
-  // screen → world mm via camera
-  let x = (sx - ctor.ox) / ctor.scale;
-  let y = (sy - ctor.oy) / ctor.scale;
-  const step = Math.max(1, ctor.gridLock | 0);
-  x = Math.round(x / step) * step;
-  y = Math.round(y / step) * step;
-  x = Math.max(0, Math.min(CANVAS_MM - 1, x));
-  y = Math.max(0, Math.min(CANVAS_MM - 1, y));
-  return { x, y };
+  return screenToCtorWorld(ctorCanvas, ctor, e, CANVAS_MM);
 }
 
 function bgColorAt(px, py) {
-  // Fundo padrão branco em todo o canvas 3×3
-  return [255, 255, 255, 255];
+  return whiteBg();
 }
 
 function pushUndo() {
-  if (!ctor.bufCtx) return;
-  try {
-    const snap = ctor.bufCtx.getImageData(0, 0, CANVAS_MM, CANVAS_MM);
-    ctor.undoStack.push(snap);
-    if (ctor.undoStack.length > ctor.maxHistory) ctor.undoStack.shift();
-    ctor.redoStack = [];
-  } catch (e) { /* ignore */ }
+  pushPaintUndo(ctor, CANVAS_MM);
 }
 
 function undoCtor() {
-  if (!ctor.undoStack.length || !ctor.bufCtx) return;
-  try {
-    const cur = ctor.bufCtx.getImageData(0, 0, CANVAS_MM, CANVAS_MM);
-    ctor.redoStack.push(cur);
-    const prev = ctor.undoStack.pop();
-    ctor.bufCtx.putImageData(prev, 0, 0);
-    drawCtor();
-  } catch (e) {}
+  undoPaint(ctor, CANVAS_MM, drawCtor);
 }
 
 function redoCtor() {
-  if (!ctor.redoStack.length || !ctor.bufCtx) return;
-  try {
-    const cur = ctor.bufCtx.getImageData(0, 0, CANVAS_MM, CANVAS_MM);
-    ctor.undoStack.push(cur);
-    const next = ctor.redoStack.pop();
-    ctor.bufCtx.putImageData(next, 0, 0);
-    drawCtor();
-  } catch (e) {}
+  redoPaint(ctor, CANVAS_MM, drawCtor);
 }
 
 function stampAt(ctx, x, y, width, shape, color, erase, maxW, maxH, bgFn) {
-  const s = Math.max(1, width | 0);
-  const r = Math.max(0.5, s / 2);
-  if (erase && bgFn) {
-    const pad = r + 1;
-    const xA = Math.max(0, Math.floor(x - pad));
-    const yA = Math.max(0, Math.floor(y - pad));
-    const xB = Math.min(maxW - 1, Math.ceil(x + pad));
-    const yB = Math.min(maxH - 1, Math.ceil(y + pad));
-    const w = xB - xA + 1, h = yB - yA + 1;
-    if (w <= 0 || h <= 0) return;
-    const img = ctx.getImageData(xA, yA, w, h);
-    const d = img.data;
-    for (let py = yA; py <= yB; py++) {
-      for (let px = xA; px <= xB; px++) {
-        let inside = false;
-        if (shape === 'square')
-          inside = px >= x - s / 2 && px < x + s / 2 && py >= y - s / 2 && py < y + s / 2;
-        else {
-          const ddx = px + 0.5 - x, ddy = py + 0.5 - y;
-          inside = ddx * ddx + ddy * ddy <= r * r;
-        }
-        if (!inside) continue;
-        const bg = bgFn(px, py);
-        const ii = ((py - yA) * w + (px - xA)) * 4;
-        d[ii] = bg[0]; d[ii + 1] = bg[1]; d[ii + 2] = bg[2]; d[ii + 3] = bg[3];
-      }
-    }
-    ctx.putImageData(img, xA, yA);
-    return;
-  }
-  ctx.fillStyle = color;
-  if (shape === 'square') {
-    ctx.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), s, s);
-  } else {
-    ctx.beginPath();
-    ctx.arc(x + 0.5, y + 0.5, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  _stampAt(ctx, x, y, width, shape, color, erase, maxW, maxH, bgFn);
 }
 
 function strokeLineOnBuf(ctx, x0, y0, x1, y1, color, width, shape, erase, maxW, maxH, bgFn) {
-  const dx = x1 - x0, dy = y1 - y0;
-  const dist = Math.hypot(dx, dy) || 1;
-  // passo menor que a espessura para não ficar pontilhado
-  const step = Math.max(0.5, width * 0.35);
-  const steps = Math.max(1, Math.ceil(dist / step));
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    stampAt(ctx, x0 + dx * t, y0 + dy * t, width, shape, color, erase, maxW, maxH, bgFn);
-  }
+  _strokeLineOnBuf(ctx, x0, y0, x1, y1, color, width, shape, erase, maxW, maxH, bgFn);
 }
 
 function paintAt(x, y) {
-  const ctx = ctor.bufCtx;
-  const s = Math.max(1, ctor.brush | 0);
-  const r = Math.max(0.5, s / 2);
-
-  if (ctor.tool === 'erase') {
-    // Apaga só a pintura: restaura pixel a pixel o fundo original (não “vaza” cinza/branco)
-    const x0 = Math.max(0, Math.floor(x - r - 1));
-    const y0 = Math.max(0, Math.floor(y - r - 1));
-    const x1 = Math.min(CANVAS_MM - 1, Math.ceil(x + r + 1));
-    const y1 = Math.min(CANVAS_MM - 1, Math.ceil(y + r + 1));
-    const w = x1 - x0 + 1;
-    const h = y1 - y0 + 1;
-    if (w <= 0 || h <= 0) return;
-    const img = ctx.getImageData(x0, y0, w, h);
-    const d = img.data;
-    for (let py = y0; py <= y1; py++) {
-      for (let px = x0; px <= x1; px++) {
-        let inside = false;
-        if (ctor.shape === 'square') {
-          inside = px >= x - s / 2 && px < x + s / 2 && py >= y - s / 2 && py < y + s / 2;
-        } else {
-          const dx = px + 0.5 - x, dy = py + 0.5 - y;
-          inside = dx * dx + dy * dy <= r * r;
-        }
-        if (!inside) continue;
-        const bg = bgColorAt(px, py);
-        const i = ((py - y0) * w + (px - x0)) * 4;
-        d[i] = bg[0]; d[i + 1] = bg[1]; d[i + 2] = bg[2]; d[i + 3] = bg[3];
-      }
-    }
-    ctx.putImageData(img, x0, y0);
-    return;
-  }
-
-  // pintura normal
-  ctx.fillStyle = ctor.color;
-  if (ctor.shape === 'square') {
-    ctx.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), s, s);
-  } else {
-    ctx.beginPath();
-    ctx.arc(x + 0.5, y + 0.5, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  _paintAtShared(ctor, x, y, CANVAS_MM, bgColorAt);
 }
 
 function pickColor(x, y) {
-  const d = ctor.bufCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
-  const hex = '#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join('');
-  if (d[0] > 240 && d[1] > 240 && d[2] > 240) {
+  const { hex, nearWhite } = pickColorAt(ctor.bufCtx, x, y);
+  if (nearWhite) {
     ctor.tool = 'erase';
   } else {
     ctor.tool = 'paint';
@@ -1583,12 +1452,12 @@ function loop() {
 
 
 // ─── Object Constructor (300×300, só pincel/cores) ────────────
-const OBJ_MM = 300;
+const OBJ_MM = CTOR_SIZE_MM;
 const objCtor = {
   tool: 'paint', color: '#000000', brush: 20, shape: 'round', gridLock: 10,
   painting: false, buf: null, bufCtx: null,
   scale: 1, ox: 0, oy: 0, panning: false, lastX: 0, lastY: 0,
-  undoStack: [], redoStack: [], maxHistory: 40,
+  undoStack: [], redoStack: [], maxHistory: CTOR_HISTORY_MAX,
   cursorX: null, cursorY: null,
   lineStart: null
 };
@@ -1596,13 +1465,7 @@ const objCtorCanvas = document.getElementById('objCtorCanvas');
 const objCtorCtx = objCtorCanvas ? objCtorCanvas.getContext('2d') : null;
 
 function initObjBuf() {
-  const c = document.createElement('canvas');
-  c.width = OBJ_MM; c.height = OBJ_MM;
-  objCtor.buf = c;
-  objCtor.bufCtx = c.getContext('2d');
-  // Fundo padrão branco no construtor (na renderização da arena o branco é tratado como transparente)
-  objCtor.bufCtx.fillStyle = '#ffffff';
-  objCtor.bufCtx.fillRect(0, 0, OBJ_MM, OBJ_MM);
+  initPaintBuffer(objCtor, OBJ_MM);
 }
 
 function openObjConstructorTab() {
@@ -1632,31 +1495,11 @@ function closeObjConstructorTab() {
 }
 
 function fitObjCtorCanvas() {
-  const wrap = document.getElementById('canvasWrap');
-  const r = wrap.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = Math.max(200, r.width - 16);
-  const cssH = Math.max(200, r.height - 16);
-  objCtorCanvas.style.width = cssW + 'px';
-  objCtorCanvas.style.height = cssH + 'px';
-  objCtorCanvas.width = Math.floor(cssW * dpr);
-  objCtorCanvas.height = Math.floor(cssH * dpr);
-  objCtorCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const pad = 24;
-  const s = Math.min((cssW - pad * 2) / OBJ_MM, (cssH - pad * 2) / OBJ_MM, 3);
-  objCtor.scale = Math.max(0.1, s);
-  objCtor.ox = (cssW - OBJ_MM * objCtor.scale) / 2;
-  objCtor.oy = (cssH - OBJ_MM * objCtor.scale) / 2;
+  fitCtorCamera(objCtorCanvas, objCtorCtx, objCtor, OBJ_MM, { pad: 24, maxFit: 3 });
 }
 
 function setObjCtorZoom(factor) {
-  const cssW = objCtorCanvas.clientWidth, cssH = objCtorCanvas.clientHeight;
-  const cx = cssW / 2, cy = cssH / 2;
-  const wx = (cx - objCtor.ox) / objCtor.scale;
-  const wy = (cy - objCtor.oy) / objCtor.scale;
-  objCtor.scale = Math.max(0.08, Math.min(5, objCtor.scale * factor));
-  objCtor.ox = cx - wx * objCtor.scale;
-  objCtor.oy = cy - wy * objCtor.scale;
+  _setCtorZoomCam(objCtorCanvas, objCtor, factor, { min: 0.08, max: 5 });
   drawObjCtor();
 }
 
@@ -1761,75 +1604,21 @@ function drawObjCtor() {
 }
 
 function objCtorPos(e) {
-  const rect = objCtorCanvas.getBoundingClientRect();
-  let x = (e.clientX - rect.left - objCtor.ox) / objCtor.scale;
-  let y = (e.clientY - rect.top - objCtor.oy) / objCtor.scale;
-  const step = Math.max(1, objCtor.gridLock | 0);
-  x = Math.round(x / step) * step;
-  y = Math.round(y / step) * step;
-  return {
-    x: Math.max(0, Math.min(OBJ_MM - 1, x)),
-    y: Math.max(0, Math.min(OBJ_MM - 1, y))
-  };
+  return screenToCtorWorld(objCtorCanvas, objCtor, e, OBJ_MM);
 }
 
 function pushObjUndo() {
-  try {
-    objCtor.undoStack.push(objCtor.bufCtx.getImageData(0, 0, OBJ_MM, OBJ_MM));
-    if (objCtor.undoStack.length > objCtor.maxHistory) objCtor.undoStack.shift();
-    objCtor.redoStack = [];
-  } catch (e) {}
+  pushPaintUndo(objCtor, OBJ_MM);
 }
 function undoObjCtor() {
-  if (!objCtor.undoStack.length) return;
-  try {
-    objCtor.redoStack.push(objCtor.bufCtx.getImageData(0, 0, OBJ_MM, OBJ_MM));
-    objCtor.bufCtx.putImageData(objCtor.undoStack.pop(), 0, 0);
-    drawObjCtor();
-  } catch (e) {}
+  undoPaint(objCtor, OBJ_MM, drawObjCtor);
 }
 function redoObjCtor() {
-  if (!objCtor.redoStack.length) return;
-  try {
-    objCtor.undoStack.push(objCtor.bufCtx.getImageData(0, 0, OBJ_MM, OBJ_MM));
-    objCtor.bufCtx.putImageData(objCtor.redoStack.pop(), 0, 0);
-    drawObjCtor();
-  } catch (e) {}
+  redoPaint(objCtor, OBJ_MM, drawObjCtor);
 }
 
 function paintObjAt(x, y) {
-  const ctx = objCtor.bufCtx;
-  const s = Math.max(1, objCtor.brush | 0);
-  const r = Math.max(0.5, s / 2);
-  if (objCtor.tool === 'erase') {
-    const x0 = Math.max(0, Math.floor(x - r - 1));
-    const y0 = Math.max(0, Math.floor(y - r - 1));
-    const x1 = Math.min(OBJ_MM - 1, Math.ceil(x + r + 1));
-    const y1 = Math.min(OBJ_MM - 1, Math.ceil(y + r + 1));
-    const w = x1 - x0 + 1, h = y1 - y0 + 1;
-    if (w <= 0 || h <= 0) return;
-    const img = ctx.getImageData(x0, y0, w, h);
-    const d = img.data;
-    for (let py = y0; py <= y1; py++) {
-      for (let px = x0; px <= x1; px++) {
-        let inside = false;
-        if (objCtor.shape === 'square')
-          inside = px >= x - s / 2 && px < x + s / 2 && py >= y - s / 2 && py < y + s / 2;
-        else {
-          const dx = px + 0.5 - x, dy = py + 0.5 - y;
-          inside = dx * dx + dy * dy <= r * r;
-        }
-        if (!inside) continue;
-        const i = ((py - y0) * w + (px - x0)) * 4;
-        d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = 255;
-      }
-    }
-    ctx.putImageData(img, x0, y0);
-    return;
-  }
-  ctx.fillStyle = objCtor.color;
-  if (objCtor.shape === 'square') ctx.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), s, s);
-  else { ctx.beginPath(); ctx.arc(x + 0.5, y + 0.5, r, 0, Math.PI * 2); ctx.fill(); }
+  _paintAtShared(objCtor, x, y, OBJ_MM, whiteBg);
 }
 
 if (objCtorCanvas) {

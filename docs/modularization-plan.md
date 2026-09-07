@@ -151,16 +151,17 @@ Wrappers finos permanecem no `main` para deps; `BUILTIN_TILE_DEFS` (morto) remov
 
 **Critério de pronto:** Play/Pause/Step, cenários, WASD, script e sensores com o mesmo comportamento, lógica fora do `main`.
 
-### Fase 4 — Motor de pintura compartilhado
-
-Hoje o construtor de ladrilho (~1423–1985) e o de objeto (~2693–3162) repetem: buffer offscreen, undo/redo, zoom/fit, `stampAt` / linha, grid lock, conta-gotas.
+### Fase 4 — Motor de pintura compartilhado ✅
 
 | Módulo | Conteúdo |
 |--------|----------|
-| `constructors/paint/PaintBuffer.js` | buffer, undo stack, stamp, stroke, pick |
-| `constructors/paint/CtorCamera.js` | fit/zoom/pan do canvas do construtor |
+| `constructors/paint/PaintBuffer.js` | buffer, undo/redo, stamp, stroke, pick |
+| `constructors/paint/CtorCamera.js` | fit/zoom/pan e screen→world com grid lock |
 
-**Critério de pronto:** uma única implementação de pincel; os dois construtores só configuram tamanho (300×300), paleta e persistência.
+Constantes: `CTOR_GRID_CELLS`, `CTOR_TILE_CANVAS_MM`, `CTOR_HISTORY_MAX`.
+`main.js` ainda tem `drawCtor` / `drawObjCtor` e wiring de eventos (Fase 5 move UI).
+
+**Critério de pronto:** uma única implementação de pincel; ambos usam `PaintBuffer` + `CtorCamera`.
 
 ### Fase 5 — Construtor de ladrilho e de objeto
 
